@@ -1,0 +1,21 @@
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: llm-expert-chat-mysql
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-llm_expert_chat}
+      MYSQL_USER: ${MYSQL_USER:-llm_user}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-llm_password}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root_password}
+    ports:
+      - "${MYSQL_PORT:-3306}:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  mysql_data:
