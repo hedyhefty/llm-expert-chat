@@ -107,16 +107,16 @@ function applyExpertEvent(message: Message, event: ChatExpertEvent) {
   detail.model = event.model
 
   if (event.event === 'expert_delta' && event.content) {
-    message.status = `${event.title} is drafting`
+    message.status = activeExpertStatus(event)
     detail.content += event.content
   } else if (event.event === 'expert_reasoning_delta' && event.reasoning) {
     message.status = `${event.title} is thinking`
     detail.reasoning += event.reasoning
   } else if (event.event === 'expert_start') {
-    message.status = `${event.title} is working`
+    message.status = startExpertStatus(event)
   } else if (event.event === 'expert_done') {
     detail.done = true
-    message.status = event.role === 'synthesizer' ? 'Finalizing answer' : `${event.title} finished`
+    message.status = doneExpertStatus(event)
     detail.error = event.error ?? undefined
     if (event.content !== undefined) {
       detail.content = event.content
@@ -125,6 +125,45 @@ function applyExpertEvent(message: Message, event: ChatExpertEvent) {
       detail.reasoning = event.reasoning
     }
   }
+}
+
+function startExpertStatus(event: ChatExpertEvent): string {
+  if (event.role === 'planner') {
+    return 'Planning team strategy'
+  }
+  if (event.role === 'reviewer') {
+    return 'Reviewing expert outputs'
+  }
+  if (event.role === 'synthesizer') {
+    return 'Preparing final answer'
+  }
+  return `${event.title} is working`
+}
+
+function activeExpertStatus(event: ChatExpertEvent): string {
+  if (event.role === 'planner') {
+    return 'Building team plan'
+  }
+  if (event.role === 'reviewer') {
+    return 'Auditing expert outputs'
+  }
+  if (event.role === 'synthesizer') {
+    return 'Writing final answer'
+  }
+  return `${event.title} is drafting`
+}
+
+function doneExpertStatus(event: ChatExpertEvent): string {
+  if (event.role === 'planner') {
+    return 'Team plan ready'
+  }
+  if (event.role === 'reviewer') {
+    return 'Review complete'
+  }
+  if (event.role === 'synthesizer') {
+    return 'Finalizing answer'
+  }
+  return `${event.title} finished`
 }
 
 function assistantParts(content: string): AssistantParts {
@@ -198,7 +237,7 @@ function pendingLabel(message: Message): string {
             <div class="markdown-body reasoning-markdown" v-html="renderMarkdown(assistantReasoning(message))" />
           </details>
           <details v-if="message.experts?.length" class="experts-panel">
-            <summary>Expert details</summary>
+            <summary>Team details</summary>
             <article v-for="expert in message.experts" :key="expert.role" class="expert-detail">
               <header>
                 <div>
