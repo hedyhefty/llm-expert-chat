@@ -2,6 +2,7 @@
 import { ref } from 'vue'
 import type { ChatExpertEvent } from '../api/client'
 import { streamChat } from '../api/client'
+import { renderMarkdown } from '../utils/markdown'
 
 type ChatMode = 'normal' | 'expert'
 type ExpertDetail = {
@@ -187,12 +188,16 @@ function pendingLabel(message: Message): string {
           <p v-if="message.status && !pendingLabel(message)" class="message-status">
             {{ message.status }}<span class="typing-dots" aria-hidden="true">...</span>
           </p>
-          <p v-if="assistantAnswer(message)">{{ assistantAnswer(message) }}</p>
-          <details v-if="assistantReasoning(message)" class="reasoning-panel" :open="!assistantAnswer(message)">
+          <div
+            v-if="assistantAnswer(message)"
+            class="markdown-body"
+            v-html="renderMarkdown(assistantAnswer(message))"
+          />
+          <details v-if="assistantReasoning(message)" class="reasoning-panel">
             <summary>Reasoning</summary>
-            <p>{{ assistantReasoning(message) }}</p>
+            <div class="markdown-body reasoning-markdown" v-html="renderMarkdown(assistantReasoning(message))" />
           </details>
-          <details v-if="message.experts?.length" class="experts-panel" open>
+          <details v-if="message.experts?.length" class="experts-panel">
             <summary>Expert details</summary>
             <article v-for="expert in message.experts" :key="expert.role" class="expert-detail">
               <header>
@@ -202,10 +207,14 @@ function pendingLabel(message: Message): string {
                 </div>
                 <span class="expert-status">{{ expert.done ? 'Done' : 'Running' }}</span>
               </header>
-              <p v-if="expert.content">{{ expert.content }}</p>
+              <div
+                v-if="expert.content"
+                class="markdown-body expert-markdown"
+                v-html="renderMarkdown(expert.content)"
+              />
               <details v-if="expert.reasoning" class="expert-reasoning">
                 <summary>Reasoning</summary>
-                <p>{{ expert.reasoning }}</p>
+                <div class="markdown-body reasoning-markdown" v-html="renderMarkdown(expert.reasoning)" />
               </details>
               <p v-if="expert.error" class="expert-error">{{ expert.error }}</p>
             </article>
