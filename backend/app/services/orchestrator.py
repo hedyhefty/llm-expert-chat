@@ -1,6 +1,7 @@
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from enum import Enum
+import json
 
 import httpx
 
@@ -22,12 +23,28 @@ class StreamPart:
 
 
 class ChatOrchestrator:
-    async def stream_reply(self, message: str, mode: ChatMode, provider: LLMProvider | None = None) -> AsyncIterator[str]:
+    async def stream_reply(
+        self,
+        message: str,
+        mode: ChatMode,
+        provider: LLMProvider | None = None,
+        providers: list[LLMProvider] | None = None,
+    ) -> AsyncIterator[str]:
         if mode == ChatMode.EXPERT:
-            team = ExpertTeam()
-            results = await team.run(message)
-            final = next(result.content for result in results if result.role_name == "synthesizer")
-            yield _to_sse(final)
+            expert_providers = providers or ([provider] if provider is not None else [])
+            if not expert_providers:
+                yield _to_sse("Expert mode needs at least one enabled provider.")
+                return
+
+            team = ExpertTeam(expert_providers)
+            async for event in team.stream(message):
+                yield _to_json_sse(event.event, asdict(event))
+                if event.role == "synthesizer" and event.event == "expert_delta":
+                    yield _to_sse(event.content, event="message")
+                elif event.role == "synthesizer" and event.event == "expert_reasoning_delta":
+                    yield _to_sse(event.reasoning, event="reasoning")
+
+            yield "event: done\ndata: [DONE]\n\n"
             return
 
         if provider is None:
@@ -43,8 +60,12 @@ class ChatOrchestrator:
 
         splitter = ReasoningSplitter()
         try:
-            async for token in client.stream_chat(messages):
-                for part in splitter.feed(token):
+            async for chunk in client.stream_chat(messages):
+                if chunk.event == "reasoning":
+                    yield _to_sse(chunk.content, event="reasoning")
+                    continue
+
+                for part in splitter.feed(chunk.content):
                     yield _to_sse(part.content, event=part.event)
             for part in splitter.flush():
                 yield _to_sse(part.content, event=part.event)
@@ -58,6 +79,10 @@ def _to_sse(data: str, event: str | None = None) -> str:
     lines = data.splitlines() or [""]
     event_line = f"event: {event}\n" if event else ""
     return event_line + "".join(f"data: {line}\n" for line in lines) + "\n"
+
+
+def _to_json_sse(event: str, data: dict[str, object]) -> str:
+    return _to_sse(json.dumps(data, ensure_ascii=False), event=event)
 
 
 class ReasoningSplitter:

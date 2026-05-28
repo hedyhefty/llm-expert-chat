@@ -249,6 +249,34 @@ button {
   white-space: pre-wrap;
 }
 
+.message-status,
+.message-pending {
+  color: #657079;
+  font-size: 13px;
+}
+
+.message-pending {
+  font-weight: 600;
+}
+
+.typing-dots {
+  display: inline-block;
+  min-width: 18px;
+  overflow: hidden;
+  vertical-align: bottom;
+  animation: typing-dots 1.2s steps(4, end) infinite;
+}
+
+@keyframes typing-dots {
+  0% {
+    width: 0;
+  }
+
+  100% {
+    width: 18px;
+  }
+}
+
 .reasoning-panel {
   margin-top: 10px;
   color: #56616a;
@@ -265,6 +293,68 @@ button {
   padding-top: 8px;
   border-top: 1px solid #e3ded4;
   color: #657079;
+}
+
+.experts-panel {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid #e3ded4;
+}
+
+.experts-panel > summary {
+  cursor: pointer;
+  color: #334047;
+  font-weight: 700;
+}
+
+.expert-detail {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid #e6e0d5;
+  border-radius: 8px;
+  background: #fbfaf7;
+}
+
+.expert-detail header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.expert-detail h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.expert-detail span,
+.expert-status {
+  color: #657079;
+  font-size: 12px;
+}
+
+.expert-detail p {
+  color: #334047;
+  font-size: 14px;
+}
+
+.expert-reasoning summary {
+  cursor: pointer;
+  color: #657079;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.expert-reasoning p {
+  margin-top: 8px;
+  color: #657079;
+  font-size: 13px;
+}
+
+.expert-error {
+  color: #b42318;
 }
 
 .composer {

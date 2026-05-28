@@ -1,13 +1,26 @@
 <script setup lang="ts">
 import { ref } from 'vue'
+import type { ChatExpertEvent } from '../api/client'
 import { streamChat } from '../api/client'
 
 type ChatMode = 'normal' | 'expert'
+type ExpertDetail = {
+  role: string
+  title: string
+  providerName: string
+  model: string
+  content: string
+  reasoning: string
+  done: boolean
+  error?: string
+}
 type Message = {
   id: string
   role: 'user' | 'assistant'
   content: string
   reasoning?: string
+  experts?: ExpertDetail[]
+  status?: string
 }
 type AssistantParts = {
   answer: string
@@ -32,8 +45,14 @@ async function sendMessage() {
   }
 
   messages.value.push({ id: crypto.randomUUID(), role: 'user', content })
-  const assistantMessage: Message = { id: crypto.randomUUID(), role: 'assistant', content: '' }
-  messages.value.push(assistantMessage)
+  const assistantIndex =
+    messages.value.push({
+      id: crypto.randomUUID(),
+      role: 'assistant',
+      content: '',
+      status: mode.value === 'expert' ? 'Starting expert team' : 'Contacting model',
+    }) - 1
+  const assistantMessage = messages.value[assistantIndex]
   input.value = ''
   loading.value = true
 
@@ -42,16 +61,68 @@ async function sendMessage() {
       content,
       mode.value,
       (token) => {
+        assistantMessage.status = 'Writing answer'
         assistantMessage.content += token
       },
       (token) => {
+        if (!assistantMessage.content.trim()) {
+          assistantMessage.status = 'Thinking'
+        }
         assistantMessage.reasoning = `${assistantMessage.reasoning ?? ''}${token}`
+      },
+      (event) => {
+        applyExpertEvent(assistantMessage, event)
       },
     )
   } catch (error) {
     assistantMessage.content = error instanceof Error ? error.message : 'Request failed'
   } finally {
+    assistantMessage.status = undefined
     loading.value = false
+  }
+}
+
+function applyExpertEvent(message: Message, event: ChatExpertEvent) {
+  if (!message.experts) {
+    message.experts = []
+  }
+
+  let detail = message.experts.find((expert) => expert.role === event.role)
+  if (!detail) {
+    detail = {
+      role: event.role,
+      title: event.title,
+      providerName: event.provider_name,
+      model: event.model,
+      content: '',
+      reasoning: '',
+      done: false,
+    }
+    message.experts.push(detail)
+  }
+
+  detail.title = event.title
+  detail.providerName = event.provider_name
+  detail.model = event.model
+
+  if (event.event === 'expert_delta' && event.content) {
+    message.status = `${event.title} is drafting`
+    detail.content += event.content
+  } else if (event.event === 'expert_reasoning_delta' && event.reasoning) {
+    message.status = `${event.title} is thinking`
+    detail.reasoning += event.reasoning
+  } else if (event.event === 'expert_start') {
+    message.status = `${event.title} is working`
+  } else if (event.event === 'expert_done') {
+    detail.done = true
+    message.status = event.role === 'synthesizer' ? 'Finalizing answer' : `${event.title} finished`
+    detail.error = event.error ?? undefined
+    if (event.content !== undefined) {
+      detail.content = event.content
+    }
+    if (event.reasoning !== undefined) {
+      detail.reasoning = event.reasoning
+    }
   }
 }
 
@@ -84,6 +155,13 @@ function assistantReasoning(message: Message): string {
   }
   return assistantParts(message.content).reasoning
 }
+
+function pendingLabel(message: Message): string {
+  if (message.content.trim() || message.reasoning?.trim() || message.experts?.length) {
+    return ''
+  }
+  return message.status ?? 'Organizing answer'
+}
 </script>
 
 <template>
@@ -103,10 +181,34 @@ function assistantReasoning(message: Message): string {
     <div class="message-list">
       <article v-for="message in messages" :key="message.id" :class="['message', message.role]">
         <template v-if="message.role === 'assistant'">
+          <p v-if="pendingLabel(message)" class="message-pending">
+            {{ pendingLabel(message) }}<span class="typing-dots" aria-hidden="true">...</span>
+          </p>
+          <p v-if="message.status && !pendingLabel(message)" class="message-status">
+            {{ message.status }}<span class="typing-dots" aria-hidden="true">...</span>
+          </p>
           <p v-if="assistantAnswer(message)">{{ assistantAnswer(message) }}</p>
-          <details v-if="assistantReasoning(message)" class="reasoning-panel">
+          <details v-if="assistantReasoning(message)" class="reasoning-panel" :open="!assistantAnswer(message)">
             <summary>Reasoning</summary>
             <p>{{ assistantReasoning(message) }}</p>
+          </details>
+          <details v-if="message.experts?.length" class="experts-panel" open>
+            <summary>Expert details</summary>
+            <article v-for="expert in message.experts" :key="expert.role" class="expert-detail">
+              <header>
+                <div>
+                  <h3>{{ expert.title }}</h3>
+                  <span>{{ expert.providerName }} / {{ expert.model }}</span>
+                </div>
+                <span class="expert-status">{{ expert.done ? 'Done' : 'Running' }}</span>
+              </header>
+              <p v-if="expert.content">{{ expert.content }}</p>
+              <details v-if="expert.reasoning" class="expert-reasoning">
+                <summary>Reasoning</summary>
+                <p>{{ expert.reasoning }}</p>
+              </details>
+              <p v-if="expert.error" class="expert-error">{{ expert.error }}</p>
+            </article>
           </details>
         </template>
         <p v-else>{{ message.content }}</p>

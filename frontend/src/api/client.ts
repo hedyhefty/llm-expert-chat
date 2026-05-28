@@ -38,6 +38,17 @@ export type ProviderTestResponse = {
   message: string
 }
 
+export type ChatExpertEvent = {
+  event: 'expert_start' | 'expert_delta' | 'expert_reasoning_delta' | 'expert_done'
+  role: string
+  title: string
+  provider_name: string
+  model: string
+  content?: string
+  reasoning?: string
+  error?: string | null
+}
+
 export function getAuthToken(): string | null {
   return localStorage.getItem(TOKEN_KEY)
 }
@@ -103,6 +114,7 @@ export async function streamChat(
   mode: ChatMode,
   onToken: (token: string) => void,
   onReasoning?: (token: string) => void,
+  onExpertEvent?: (event: ChatExpertEvent) => void,
 ): Promise<void> {
   const response = await fetch(`${API_BASE}/api/chat/stream`, {
     method: 'POST',
@@ -129,13 +141,13 @@ export async function streamChat(
     buffer = events.pop() ?? ''
 
     for (const event of events) {
-      handleSseEvent(event, onToken, onReasoning)
+      handleSseEvent(event, onToken, onReasoning, onExpertEvent)
     }
   }
 
   buffer += decoder.decode()
   if (buffer.trim()) {
-    handleSseEvent(buffer, onToken, onReasoning)
+    handleSseEvent(buffer, onToken, onReasoning, onExpertEvent)
   }
 }
 
@@ -181,6 +193,7 @@ function handleSseEvent(
   event: string,
   onToken: (token: string) => void,
   onReasoning?: (token: string) => void,
+  onExpertEvent?: (event: ChatExpertEvent) => void,
 ): void {
   const dataLines: string[] = []
   let eventType = 'message'
@@ -208,6 +221,19 @@ function handleSseEvent(
       onReasoning?.(token)
     } else if (eventType === 'message') {
       onToken(token)
+    } else if (eventType.startsWith('expert_')) {
+      const expertEvent = parseExpertEvent(token)
+      if (expertEvent) {
+        onExpertEvent?.(expertEvent)
+      }
     }
+  }
+}
+
+function parseExpertEvent(token: string): ChatExpertEvent | null {
+  try {
+    return JSON.parse(token) as ChatExpertEvent
+  } catch {
+    return null
   }
 }

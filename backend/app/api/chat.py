@@ -13,6 +13,11 @@ from app.db.session import get_db
 from app.services.orchestrator import ChatMode, ChatOrchestrator
 
 router = APIRouter()
+SSE_HEADERS = {
+    "Cache-Control": "no-cache",
+    "Connection": "keep-alive",
+    "X-Accel-Buffering": "no",
+}
 
 
 class ChatStreamRequest(BaseModel):
@@ -26,12 +31,17 @@ async def stream_chat(
     current_user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> StreamingResponse:
-    provider = db.scalar(
+    providers = db.scalars(
         select(LLMProvider)
         .where(LLMProvider.user_id == current_user.id, LLMProvider.enabled == 1)
         .order_by(LLMProvider.created_at.desc())
-        .limit(1)
-    )
+    ).all()
+    provider = providers[0] if providers else None
     orchestrator = ChatOrchestrator()
-    stream = orchestrator.stream_reply(message=request.message, mode=request.mode, provider=provider)
-    return StreamingResponse(stream, media_type="text/event-stream")
+    stream = orchestrator.stream_reply(
+        message=request.message,
+        mode=request.mode,
+        provider=provider,
+        providers=list(providers),
+    )
+    return StreamingResponse(stream, media_type="text/event-stream", headers=SSE_HEADERS)
