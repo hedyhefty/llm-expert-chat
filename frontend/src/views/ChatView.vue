@@ -1,10 +1,15 @@
 <script setup lang="ts">
-import { ref } from 'vue'
-import type { ChatExpertEvent } from '../api/client'
-import { streamChat } from '../api/client'
+import { ref, watch } from 'vue'
+import type {
+  ChatExpertEvent,
+  ChatMode,
+  ConversationExpert,
+  ConversationMessage,
+  ConversationSummary,
+} from '../api/client'
+import { createConversation, getConversation, streamChat } from '../api/client'
 import { renderMarkdown } from '../utils/markdown'
 
-type ChatMode = 'normal' | 'expert' | 'debate'
 type ExpertDetail = {
   role: string
   title: string
@@ -36,21 +41,45 @@ type AssistantParts = {
   reasoning: string
 }
 
+const props = defineProps<{
+  conversationId: string | null
+}>()
+const emit = defineEmits<{
+  conversationCreated: [conversation: ConversationSummary]
+  conversationUpdated: [conversationId: string]
+}>()
+
 const mode = ref<ChatMode>('normal')
 const input = ref('')
 const loading = ref(false)
-const messages = ref<Message[]>([
-  {
-    id: 'welcome',
-    role: 'assistant',
-    content: 'Ready.',
+const loadingHistory = ref(false)
+const currentConversationId = ref<string | null>(null)
+const messages = ref<Message[]>(readyMessages())
+
+watch(
+  () => props.conversationId,
+  async (conversationId) => {
+    if (conversationId === currentConversationId.value) {
+      return
+    }
+    currentConversationId.value = conversationId
+    await loadConversationMessages(conversationId)
   },
-])
+  { immediate: true },
+)
 
 async function sendMessage() {
   const content = input.value.trim()
   if (!content || loading.value) {
     return
+  }
+
+  let conversationId = currentConversationId.value
+  if (!conversationId) {
+    const conversation = await createConversation(conversationTitle(content))
+    conversationId = conversation.id
+    currentConversationId.value = conversation.id
+    emit('conversationCreated', conversation)
   }
 
   messages.value.push({ id: crypto.randomUUID(), role: 'user', content })
@@ -71,6 +100,7 @@ async function sendMessage() {
     await streamChat(
       content,
       mode.value,
+      conversationId,
       (token) => {
         assistantMessage.status =
           assistantMessage.mode === 'debate' ? 'Synthesizer is writing final answer' : 'Writing answer'
@@ -92,6 +122,67 @@ async function sendMessage() {
   } finally {
     assistantMessage.status = undefined
     loading.value = false
+    emit('conversationUpdated', conversationId)
+  }
+}
+
+async function loadConversationMessages(conversationId: string | null) {
+  if (!conversationId) {
+    messages.value = readyMessages()
+    return
+  }
+
+  loadingHistory.value = true
+  messages.value = [{ id: 'loading', role: 'assistant', content: 'Loading conversation...' }]
+  try {
+    const conversation = await getConversation(conversationId)
+    messages.value = conversation.messages.length
+      ? conversation.messages.map(savedMessageToMessage)
+      : readyMessages()
+  } catch (error) {
+    messages.value = [
+      {
+        id: 'load-error',
+        role: 'assistant',
+        content: error instanceof Error ? error.message : 'Failed to load conversation',
+      },
+    ]
+  } finally {
+    loadingHistory.value = false
+  }
+}
+
+function readyMessages(): Message[] {
+  return [
+    {
+      id: 'welcome',
+      role: 'assistant',
+      content: 'Ready.',
+    },
+  ]
+}
+
+function savedMessageToMessage(message: ConversationMessage): Message {
+  return {
+    id: message.id,
+    role: message.role,
+    content: message.content,
+    mode: message.mode ?? undefined,
+    reasoning: message.reasoning || undefined,
+    experts: message.experts?.map(savedExpertToDetail),
+  }
+}
+
+function savedExpertToDetail(expert: ConversationExpert): ExpertDetail {
+  return {
+    role: expert.role,
+    title: expert.title,
+    providerName: expert.provider_name,
+    model: expert.model,
+    content: expert.content,
+    reasoning: expert.reasoning,
+    done: expert.done,
+    error: expert.error ?? undefined,
   }
 }
 
@@ -326,6 +417,11 @@ function modeLabel(value: ChatMode): string {
   return 'Normal'
 }
 
+function conversationTitle(content: string): string {
+  const title = content.replace(/\s+/g, ' ').trim()
+  return title ? title.slice(0, 60) : 'New chat'
+}
+
 function assistantParts(content: string): AssistantParts {
   const reasoning: string[] = []
   const answer = content.replace(/<think>([\s\S]*?)(?:<\/think>|$)/gi, (_match, thought) => {
@@ -441,8 +537,8 @@ function pendingLabel(message: Message): string {
     </div>
 
     <form class="composer" @submit.prevent="sendMessage">
-      <textarea v-model="input" rows="3" placeholder="Message" />
-      <button type="submit" :disabled="loading || !input.trim()">
+      <textarea v-model="input" rows="3" placeholder="Message" :disabled="loadingHistory" />
+      <button type="submit" :disabled="loading || loadingHistory || !input.trim()">
         {{ loading ? 'Sending' : 'Send' }}
       </button>
     </form>

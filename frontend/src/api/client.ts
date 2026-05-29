@@ -38,6 +38,38 @@ export type ProviderTestResponse = {
   message: string
 }
 
+export type ConversationSummary = {
+  id: string
+  title: string
+  created_at: string
+  updated_at: string
+}
+
+export type ConversationExpert = {
+  role: string
+  title: string
+  provider_name: string
+  model: string
+  content: string
+  reasoning: string
+  done: boolean
+  error?: string | null
+}
+
+export type ConversationMessage = {
+  id: string
+  role: 'user' | 'assistant'
+  content: string
+  created_at: string
+  mode?: ChatMode | null
+  reasoning?: string
+  experts?: ConversationExpert[]
+}
+
+export type ConversationDetail = ConversationSummary & {
+  messages: ConversationMessage[]
+}
+
 export type ChatExpertEvent = {
   event: 'expert_start' | 'expert_delta' | 'expert_reasoning_delta' | 'expert_done'
   role: string
@@ -109,9 +141,25 @@ export async function testProvider(id: string): Promise<ProviderTestResponse> {
   return apiFetch(`/api/providers/${id}/test`, { method: 'POST' })
 }
 
+export async function listConversations(): Promise<ConversationSummary[]> {
+  return apiFetch('/api/conversations')
+}
+
+export async function createConversation(title: string): Promise<ConversationSummary> {
+  return apiFetch('/api/conversations', {
+    method: 'POST',
+    body: JSON.stringify({ title }),
+  })
+}
+
+export async function getConversation(id: string): Promise<ConversationDetail> {
+  return apiFetch(`/api/conversations/${id}`)
+}
+
 export async function streamChat(
   message: string,
   mode: ChatMode,
+  conversationId: string,
   onToken: (token: string) => void,
   onReasoning?: (token: string) => void,
   onExpertEvent?: (event: ChatExpertEvent) => void,
@@ -119,7 +167,7 @@ export async function streamChat(
   const response = await fetch(`${API_BASE}/api/chat/stream`, {
     method: 'POST',
     headers: makeHeaders(),
-    body: JSON.stringify({ message, mode }),
+    body: JSON.stringify({ message, mode, conversation_id: conversationId }),
   })
 
   if (!response.ok || !response.body) {

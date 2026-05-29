@@ -44,6 +44,7 @@ button {
 
 .new-chat,
 .nav-list button,
+.conversation-list button,
 .mode-toggle button,
 .composer button,
 .settings-form button,
@@ -75,6 +76,33 @@ button {
 }
 
 .nav-list button.active {
+  color: #ffffff;
+  background: #334047;
+}
+
+.conversation-list {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  grid-auto-rows: max-content;
+  overflow: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.conversation-list button {
+  width: 100%;
+  height: 40px;
+  padding: 9px 10px;
+  overflow: hidden;
+  color: #c6d0d8;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: transparent;
+}
+
+.conversation-list button.active {
   color: #ffffff;
   background: #334047;
 }
