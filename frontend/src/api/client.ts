@@ -1,7 +1,7 @@
 const API_BASE = ''
 const TOKEN_KEY = 'llm-expert-chat-token'
 
-export type ChatMode = 'normal' | 'expert'
+export type ChatMode = 'normal' | 'expert' | 'debate'
 
 export type User = {
   id: string

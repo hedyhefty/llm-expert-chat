@@ -417,8 +417,6 @@ button {
 }
 
 .expert-detail {
-  display: grid;
-  gap: 10px;
   margin-top: 12px;
   padding: 12px;
   border: 1px solid #e6e0d5;
@@ -426,11 +424,24 @@ button {
   background: #fbfaf7;
 }
 
-.expert-detail header {
+.expert-detail[open] {
+  background: #fffdf8;
+}
+
+.expert-detail > summary {
+  cursor: pointer;
+}
+
+.expert-summary-content {
   display: flex;
   align-items: start;
   justify-content: space-between;
   gap: 12px;
+  min-width: 0;
+}
+
+.expert-summary-content > div {
+  min-width: 0;
 }
 
 .expert-detail h3 {
@@ -440,6 +451,7 @@ button {
 
 .expert-detail span,
 .expert-status {
+  flex: 0 0 auto;
   color: #657079;
   font-size: 12px;
 }
@@ -447,6 +459,14 @@ button {
 .expert-detail > p {
   color: #334047;
   font-size: 14px;
+}
+
+.expert-body {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid #e6e0d5;
 }
 
 .expert-markdown {

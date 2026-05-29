@@ -7,6 +7,7 @@ import httpx
 
 from app.core.encryption import decrypt_secret
 from app.db.models import LLMProvider
+from app.services.debate_team import DebateTeam
 from app.services.expert_team import ExpertTeam
 from app.services.llm_provider import OpenAICompatibleClient
 
@@ -14,6 +15,7 @@ from app.services.llm_provider import OpenAICompatibleClient
 class ChatMode(str, Enum):
     NORMAL = "normal"
     EXPERT = "expert"
+    DEBATE = "debate"
 
 
 @dataclass(frozen=True)
@@ -30,13 +32,13 @@ class ChatOrchestrator:
         provider: LLMProvider | None = None,
         providers: list[LLMProvider] | None = None,
     ) -> AsyncIterator[str]:
-        if mode == ChatMode.EXPERT:
+        if mode in {ChatMode.EXPERT, ChatMode.DEBATE}:
             expert_providers = providers or ([provider] if provider is not None else [])
             if not expert_providers:
-                yield _to_sse("Expert mode needs at least one enabled provider.")
+                yield _to_sse(f"{mode.value.title()} mode needs at least one enabled provider.")
                 return
 
-            team = ExpertTeam(expert_providers)
+            team = DebateTeam(expert_providers) if mode == ChatMode.DEBATE else ExpertTeam(expert_providers)
             async for event in team.stream(message):
                 yield _to_json_sse(event.event, asdict(event))
                 if event.role == "synthesizer" and event.event == "expert_delta":

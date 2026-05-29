@@ -4,7 +4,7 @@ import type { ChatExpertEvent } from '../api/client'
 import { streamChat } from '../api/client'
 import { renderMarkdown } from '../utils/markdown'
 
-type ChatMode = 'normal' | 'expert'
+type ChatMode = 'normal' | 'expert' | 'debate'
 type ExpertDetail = {
   role: string
   title: string
@@ -51,7 +51,7 @@ async function sendMessage() {
       id: crypto.randomUUID(),
       role: 'assistant',
       content: '',
-      status: mode.value === 'expert' ? 'Starting expert team' : 'Contacting model',
+      status: initialStatus(mode.value),
     }) - 1
   const assistantMessage = messages.value[assistantIndex]
   input.value = ''
@@ -110,7 +110,7 @@ function applyExpertEvent(message: Message, event: ChatExpertEvent) {
     message.status = activeExpertStatus(event)
     detail.content += event.content
   } else if (event.event === 'expert_reasoning_delta' && event.reasoning) {
-    message.status = `${event.title} is thinking`
+    message.status = reasoningExpertStatus(event)
     detail.reasoning += event.reasoning
   } else if (event.event === 'expert_start') {
     message.status = startExpertStatus(event)
@@ -128,6 +128,12 @@ function applyExpertEvent(message: Message, event: ChatExpertEvent) {
 }
 
 function startExpertStatus(event: ChatExpertEvent): string {
+  if (isDebateResponse(event.role)) {
+    return 'Debaters are comparing answers'
+  }
+  if (isDebater(event.role)) {
+    return 'Debaters are answering independently'
+  }
   if (event.role === 'planner') {
     return 'Planning team strategy'
   }
@@ -141,6 +147,12 @@ function startExpertStatus(event: ChatExpertEvent): string {
 }
 
 function activeExpertStatus(event: ChatExpertEvent): string {
+  if (isDebateResponse(event.role)) {
+    return 'Debaters are comparing answers'
+  }
+  if (isDebater(event.role)) {
+    return 'Debaters are answering independently'
+  }
   if (event.role === 'planner') {
     return 'Building team plan'
   }
@@ -154,6 +166,12 @@ function activeExpertStatus(event: ChatExpertEvent): string {
 }
 
 function doneExpertStatus(event: ChatExpertEvent): string {
+  if (isDebateResponse(event.role)) {
+    return 'Debaters are comparing answers'
+  }
+  if (isDebater(event.role)) {
+    return 'Debaters are answering independently'
+  }
   if (event.role === 'planner') {
     return 'Team plan ready'
   }
@@ -164,6 +182,44 @@ function doneExpertStatus(event: ChatExpertEvent): string {
     return 'Finalizing answer'
   }
   return `${event.title} finished`
+}
+
+function reasoningExpertStatus(event: ChatExpertEvent): string {
+  if (isDebateResponse(event.role)) {
+    return 'Debaters are comparing answers'
+  }
+  if (isDebater(event.role)) {
+    return 'Debaters are thinking independently'
+  }
+  return `${event.title} is thinking`
+}
+
+function isDebater(role: string): boolean {
+  return role.startsWith('debater_')
+}
+
+function isDebateResponse(role: string): boolean {
+  return isDebater(role) && role.endsWith('_response')
+}
+
+function initialStatus(value: ChatMode): string {
+  if (value === 'expert') {
+    return 'Starting expert team'
+  }
+  if (value === 'debate') {
+    return 'Starting debate team'
+  }
+  return 'Contacting model'
+}
+
+function modeLabel(value: ChatMode): string {
+  if (value === 'expert') {
+    return 'Collaborate'
+  }
+  if (value === 'debate') {
+    return 'Debate'
+  }
+  return 'Normal'
 }
 
 function assistantParts(content: string): AssistantParts {
@@ -209,12 +265,13 @@ function pendingLabel(message: Message): string {
     <header class="topbar">
       <div>
         <h1>LLM Expert Chat</h1>
-        <p>{{ mode === 'normal' ? 'Normal' : 'Expert' }}</p>
+        <p>{{ modeLabel(mode) }}</p>
       </div>
 
       <div class="mode-toggle" aria-label="Chat mode">
         <button :class="{ selected: mode === 'normal' }" @click="mode = 'normal'">Normal</button>
-        <button :class="{ selected: mode === 'expert' }" @click="mode = 'expert'">Expert</button>
+        <button :class="{ selected: mode === 'expert' }" @click="mode = 'expert'">Collaborate</button>
+        <button :class="{ selected: mode === 'debate' }" @click="mode = 'debate'">Debate</button>
       </div>
     </header>
 
@@ -238,25 +295,29 @@ function pendingLabel(message: Message): string {
           </details>
           <details v-if="message.experts?.length" class="experts-panel">
             <summary>Team details</summary>
-            <article v-for="expert in message.experts" :key="expert.role" class="expert-detail">
-              <header>
-                <div>
-                  <h3>{{ expert.title }}</h3>
-                  <span>{{ expert.providerName }} / {{ expert.model }}</span>
+            <details v-for="expert in message.experts" :key="expert.role" class="expert-detail">
+              <summary>
+                <div class="expert-summary-content">
+                  <div>
+                    <h3>{{ expert.title }}</h3>
+                    <span>{{ expert.providerName }} / {{ expert.model }}</span>
+                  </div>
+                  <span class="expert-status">{{ expert.done ? 'Done' : 'Running' }}</span>
                 </div>
-                <span class="expert-status">{{ expert.done ? 'Done' : 'Running' }}</span>
-              </header>
-              <div
-                v-if="expert.content"
-                class="markdown-body expert-markdown"
-                v-html="renderMarkdown(expert.content)"
-              />
-              <details v-if="expert.reasoning" class="expert-reasoning">
-                <summary>Reasoning</summary>
-                <div class="markdown-body reasoning-markdown" v-html="renderMarkdown(expert.reasoning)" />
-              </details>
-              <p v-if="expert.error" class="expert-error">{{ expert.error }}</p>
-            </article>
+              </summary>
+              <div class="expert-body">
+                <div
+                  v-if="expert.content"
+                  class="markdown-body expert-markdown"
+                  v-html="renderMarkdown(expert.content)"
+                />
+                <details v-if="expert.reasoning" class="expert-reasoning">
+                  <summary>Reasoning</summary>
+                  <div class="markdown-body reasoning-markdown" v-html="renderMarkdown(expert.reasoning)" />
+                </details>
+                <p v-if="expert.error" class="expert-error">{{ expert.error }}</p>
+              </div>
+            </details>
           </details>
         </template>
         <p v-else>{{ message.content }}</p>
