@@ -15,12 +15,20 @@ type ExpertDetail = {
   done: boolean
   error?: string
 }
+type ActivityStatus = 'pending' | 'running' | 'done'
+type TeamActivity = {
+  key: string
+  label: string
+  status: ActivityStatus
+}
 type Message = {
   id: string
   role: 'user' | 'assistant'
   content: string
+  mode?: ChatMode
   reasoning?: string
   experts?: ExpertDetail[]
+  activities?: TeamActivity[]
   status?: string
 }
 type AssistantParts = {
@@ -51,6 +59,8 @@ async function sendMessage() {
       id: crypto.randomUUID(),
       role: 'assistant',
       content: '',
+      mode: mode.value,
+      activities: mode.value === 'debate' ? createDebateActivities() : undefined,
       status: initialStatus(mode.value),
     }) - 1
   const assistantMessage = messages.value[assistantIndex]
@@ -62,12 +72,14 @@ async function sendMessage() {
       content,
       mode.value,
       (token) => {
-        assistantMessage.status = 'Writing answer'
+        assistantMessage.status =
+          assistantMessage.mode === 'debate' ? 'Synthesizer is writing final answer' : 'Writing answer'
         assistantMessage.content += token
       },
       (token) => {
         if (!assistantMessage.content.trim()) {
-          assistantMessage.status = 'Thinking'
+          assistantMessage.status =
+            assistantMessage.mode === 'debate' ? 'Synthesizer is preparing final answer' : 'Thinking'
         }
         assistantMessage.reasoning = `${assistantMessage.reasoning ?? ''}${token}`
       },
@@ -107,16 +119,11 @@ function applyExpertEvent(message: Message, event: ChatExpertEvent) {
   detail.model = event.model
 
   if (event.event === 'expert_delta' && event.content) {
-    message.status = activeExpertStatus(event)
     detail.content += event.content
   } else if (event.event === 'expert_reasoning_delta' && event.reasoning) {
-    message.status = reasoningExpertStatus(event)
     detail.reasoning += event.reasoning
-  } else if (event.event === 'expert_start') {
-    message.status = startExpertStatus(event)
   } else if (event.event === 'expert_done') {
     detail.done = true
-    message.status = doneExpertStatus(event)
     detail.error = event.error ?? undefined
     if (event.content !== undefined) {
       detail.content = event.content
@@ -124,6 +131,22 @@ function applyExpertEvent(message: Message, event: ChatExpertEvent) {
     if (event.reasoning !== undefined) {
       detail.reasoning = event.reasoning
     }
+  }
+
+  if (message.mode === 'debate') {
+    updateDebateActivities(message, event)
+    message.status = debateStatus(event)
+    return
+  }
+
+  if (event.event === 'expert_delta' && event.content) {
+    message.status = activeExpertStatus(event)
+  } else if (event.event === 'expert_reasoning_delta' && event.reasoning) {
+    message.status = reasoningExpertStatus(event)
+  } else if (event.event === 'expert_start') {
+    message.status = startExpertStatus(event)
+  } else if (event.event === 'expert_done') {
+    message.status = doneExpertStatus(event)
   }
 }
 
@@ -200,6 +223,87 @@ function isDebater(role: string): boolean {
 
 function isDebateResponse(role: string): boolean {
   return isDebater(role) && role.endsWith('_response')
+}
+
+function createDebateActivities(): TeamActivity[] {
+  return [
+    {
+      key: 'debater_thinking',
+      label: 'Debaters thinking independently',
+      status: 'pending',
+    },
+    {
+      key: 'debater_answering',
+      label: 'Debaters answering independently',
+      status: 'pending',
+    },
+    {
+      key: 'debater_comparing',
+      label: 'Debaters comparing answers',
+      status: 'pending',
+    },
+    {
+      key: 'synthesis',
+      label: 'Synthesizer writing final answer',
+      status: 'pending',
+    },
+  ]
+}
+
+function updateDebateActivities(message: Message, event: ChatExpertEvent) {
+  if (!message.activities) {
+    message.activities = createDebateActivities()
+  }
+
+  if (isDebateResponse(event.role)) {
+    finishStartedActivity(message, 'debater_thinking')
+    setActivityStatus(message, 'debater_answering', 'done')
+    setActivityStatus(message, 'debater_comparing', 'running')
+    return
+  }
+
+  if (isDebater(event.role)) {
+    if (event.event === 'expert_reasoning_delta') {
+      setActivityStatus(message, 'debater_thinking', 'running')
+    } else if (event.event === 'expert_delta' && event.content) {
+      setActivityStatus(message, 'debater_answering', 'running')
+    }
+    return
+  }
+
+  if (event.role === 'synthesizer') {
+    finishStartedActivity(message, 'debater_thinking')
+    setActivityStatus(message, 'debater_answering', 'done')
+    setActivityStatus(message, 'debater_comparing', 'done')
+    setActivityStatus(message, 'synthesis', event.event === 'expert_done' ? 'done' : 'running')
+  }
+}
+
+function setActivityStatus(message: Message, key: string, status: ActivityStatus) {
+  const activity = message.activities?.find((item) => item.key === key)
+  if (!activity || (activity.status === 'done' && status !== 'done')) {
+    return
+  }
+  activity.status = status
+}
+
+function finishStartedActivity(message: Message, key: string) {
+  const activity = message.activities?.find((item) => item.key === key)
+  if (!activity || activity.status === 'pending') {
+    return
+  }
+  activity.status = 'done'
+}
+
+function visibleActivities(message: Message): TeamActivity[] {
+  return message.activities?.filter((activity) => activity.status !== 'pending') ?? []
+}
+
+function debateStatus(event: ChatExpertEvent): string {
+  if (event.role === 'synthesizer') {
+    return event.event === 'expert_done' ? 'Finalizing answer' : 'Synthesizer is writing final answer'
+  }
+  return 'Debate team is working'
 }
 
 function initialStatus(value: ChatMode): string {
@@ -284,6 +388,18 @@ function pendingLabel(message: Message): string {
           <p v-if="message.status && !pendingLabel(message)" class="message-status">
             {{ message.status }}<span class="typing-dots" aria-hidden="true">...</span>
           </p>
+          <div v-if="visibleActivities(message).length" class="activity-panel">
+            <p class="activity-title">Team activity</p>
+            <div
+              v-for="activity in visibleActivities(message)"
+              :key="activity.key"
+              :class="['activity-row', activity.status]"
+            >
+              <span class="activity-marker" aria-hidden="true" />
+              <span>{{ activity.label }}</span>
+              <span v-if="activity.status === 'running'" class="typing-dots" aria-hidden="true">...</span>
+            </div>
+          </div>
           <div
             v-if="assistantAnswer(message)"
             class="markdown-body"
