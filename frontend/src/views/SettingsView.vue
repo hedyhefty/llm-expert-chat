@@ -1,12 +1,14 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
-import type { Provider, ProviderPayload, ProviderUpdatePayload } from '../api/client'
+import { computed, onMounted, reactive, ref } from 'vue'
+import type { ModelRouting, ModelRoutingPayload, Provider, ProviderPayload, ProviderRef, ProviderUpdatePayload } from '../api/client'
 import {
   createProvider,
   deleteProvider,
+  getModelRouting,
   listProviders,
   testProvider,
   updateProvider,
+  updateModelRouting,
 } from '../api/client'
 
 type ProviderDraft = {
@@ -17,11 +19,24 @@ type ProviderDraft = {
   enabled: boolean
 }
 
+type RouteDraft = {
+  normalProviderId: string
+  expertPlannerProviderId: string
+  expertProviderIds: string[]
+  expertReviewerProviderId: string
+  expertSynthesizerProviderId: string
+  debateDebaterProviderIds: string[]
+  debateSynthesizerProviderId: string
+}
+
 const providers = ref<Provider[]>([])
+const routing = ref<ModelRouting | null>(null)
 const editingId = ref<string | null>(null)
 const loading = ref(false)
 const saving = ref(false)
+const savingRouting = ref(false)
 const statusMessage = ref('')
+const routingMessage = ref('')
 const testMessages = reactive<Record<string, string>>({})
 const draft = reactive<ProviderDraft>({
   name: '',
@@ -30,21 +45,50 @@ const draft = reactive<ProviderDraft>({
   apiKey: '',
   enabled: true,
 })
+const routingDraft = reactive<RouteDraft>({
+  normalProviderId: '',
+  expertPlannerProviderId: '',
+  expertProviderIds: [],
+  expertReviewerProviderId: '',
+  expertSynthesizerProviderId: '',
+  debateDebaterProviderIds: [],
+  debateSynthesizerProviderId: '',
+})
 
-onMounted(() => loadProviders())
+const enabledProviders = computed(() => providers.value.filter((provider) => provider.enabled))
 
-async function loadProviders(clearStatus = true) {
+onMounted(() => loadSettings())
+
+async function loadSettings(clearStatus = true) {
   loading.value = true
   if (clearStatus) {
     statusMessage.value = ''
+    routingMessage.value = ''
   }
 
   try {
-    providers.value = await listProviders()
+    const [providerList, routeConfig] = await Promise.all([listProviders(), getModelRouting()])
+    providers.value = providerList
+    routing.value = routeConfig
+    applyRouting(routeConfig)
   } catch (error) {
-    statusMessage.value = error instanceof Error ? error.message : 'Failed to load providers'
+    statusMessage.value = error instanceof Error ? error.message : 'Failed to load settings'
   } finally {
     loading.value = false
+  }
+}
+
+async function loadRouting(clearStatus = true) {
+  if (clearStatus) {
+    routingMessage.value = ''
+  }
+
+  try {
+    const routeConfig = await getModelRouting()
+    routing.value = routeConfig
+    applyRouting(routeConfig)
+  } catch (error) {
+    routingMessage.value = error instanceof Error ? error.message : 'Failed to load routing'
   }
 }
 
@@ -83,7 +127,7 @@ async function saveProvider() {
     }
 
     resetDraft()
-    await loadProviders(false)
+    await loadSettings(false)
   } catch (error) {
     statusMessage.value = error instanceof Error ? error.message : 'Failed to save provider'
   } finally {
@@ -115,7 +159,7 @@ async function removeProvider(provider: Provider) {
   try {
     await deleteProvider(provider.id)
     statusMessage.value = 'Provider deleted'
-    await loadProviders(false)
+    await loadSettings(false)
   } catch (error) {
     statusMessage.value = error instanceof Error ? error.message : 'Failed to delete provider'
   }
@@ -124,6 +168,7 @@ async function removeProvider(provider: Provider) {
 async function toggleProvider(provider: Provider) {
   try {
     await updateProvider(provider.id, { enabled: provider.enabled })
+    await loadRouting(false)
   } catch (error) {
     provider.enabled = !provider.enabled
     statusMessage.value = error instanceof Error ? error.message : 'Failed to update provider'
@@ -140,6 +185,75 @@ async function runProviderTest(provider: Provider) {
     testMessages[provider.id] = error instanceof Error ? error.message : 'Connection test failed'
   }
 }
+
+async function saveRouting() {
+  routingMessage.value = ''
+  savingRouting.value = true
+
+  try {
+    const routeConfig = await updateModelRouting(toRoutingPayload())
+    routing.value = routeConfig
+    applyRouting(routeConfig)
+    routingMessage.value = 'Routing saved'
+  } catch (error) {
+    routingMessage.value = error instanceof Error ? error.message : 'Failed to save routing'
+  } finally {
+    savingRouting.value = false
+  }
+}
+
+function applyRouting(routeConfig: ModelRouting) {
+  routingDraft.normalProviderId = routeConfig.normal_provider_id ?? ''
+  routingDraft.expertPlannerProviderId = routeConfig.expert_planner_provider_id ?? ''
+  routingDraft.expertProviderIds = [...routeConfig.expert_provider_ids]
+  routingDraft.expertReviewerProviderId = routeConfig.expert_reviewer_provider_id ?? ''
+  routingDraft.expertSynthesizerProviderId = routeConfig.expert_synthesizer_provider_id ?? ''
+  routingDraft.debateDebaterProviderIds = [...routeConfig.debate_debater_provider_ids]
+  routingDraft.debateSynthesizerProviderId = routeConfig.debate_synthesizer_provider_id ?? ''
+}
+
+function toRoutingPayload(): ModelRoutingPayload {
+  return {
+    normal_provider_id: emptyToNull(routingDraft.normalProviderId),
+    expert_planner_provider_id: emptyToNull(routingDraft.expertPlannerProviderId),
+    expert_provider_ids: [...routingDraft.expertProviderIds],
+    expert_reviewer_provider_id: emptyToNull(routingDraft.expertReviewerProviderId),
+    expert_synthesizer_provider_id: emptyToNull(routingDraft.expertSynthesizerProviderId),
+    debate_debater_provider_ids: [...routingDraft.debateDebaterProviderIds],
+    debate_synthesizer_provider_id: emptyToNull(routingDraft.debateSynthesizerProviderId),
+  }
+}
+
+function emptyToNull(value: string): string | null {
+  return value || null
+}
+
+function providerLabel(provider: Provider | ProviderRef): string {
+  return `${provider.name} / ${provider.model}`
+}
+
+function providerRefLabel(provider: ProviderRef | null): string {
+  return provider ? providerLabel(provider) : 'Auto'
+}
+
+function providerListLabel(providerRefs: ProviderRef[]): string {
+  return providerRefs.length ? providerRefs.map(providerLabel).join(', ') : 'Auto'
+}
+
+function isRouteProviderSelected(field: 'expertProviderIds' | 'debateDebaterProviderIds', providerId: string): boolean {
+  return routingDraft[field].includes(providerId)
+}
+
+function toggleRouteProvider(field: 'expertProviderIds' | 'debateDebaterProviderIds', providerId: string) {
+  const selectedIds = routingDraft[field]
+  const index = selectedIds.indexOf(providerId)
+  if (index >= 0) {
+    selectedIds.splice(index, 1)
+    return
+  }
+
+  selectedIds.push(providerId)
+}
 </script>
 
 <template>
@@ -152,50 +266,161 @@ async function runProviderTest(provider: Provider) {
     </header>
 
     <div class="settings-layout">
-      <form class="settings-form" @submit.prevent="saveProvider">
-        <h2>{{ editingId ? 'Edit provider' : 'Add provider' }}</h2>
-        <label>
-          Name
-          <input v-model="draft.name" placeholder="OpenAI" required />
-        </label>
-        <label>
-          Base URL
-          <input v-model="draft.baseUrl" placeholder="https://api.openai.com/v1" required />
-        </label>
-        <label>
-          Model
-          <input v-model="draft.model" placeholder="gpt-4.1-mini" required />
-        </label>
-        <label>
-          API Key
-          <input
-            v-model="draft.apiKey"
-            type="password"
-            :placeholder="editingId ? 'Leave blank to keep current key' : 'sk-...'"
-            :required="!editingId"
-          />
-        </label>
-        <label class="checkbox-row">
-          <input v-model="draft.enabled" type="checkbox" />
-          Enabled
-        </label>
+      <div class="settings-stack">
+        <form class="settings-form" @submit.prevent="saveProvider">
+          <h2>{{ editingId ? 'Edit provider' : 'Add provider' }}</h2>
+          <label>
+            Name
+            <input v-model="draft.name" placeholder="OpenAI" required />
+          </label>
+          <label>
+            Base URL
+            <input v-model="draft.baseUrl" placeholder="https://api.openai.com/v1" required />
+          </label>
+          <label>
+            Model
+            <input v-model="draft.model" placeholder="gpt-4.1-mini" required />
+          </label>
+          <label>
+            API Key
+            <input
+              v-model="draft.apiKey"
+              type="password"
+              :placeholder="editingId ? 'Leave blank to keep current key' : 'sk-...'"
+              :required="!editingId"
+            />
+          </label>
+          <label class="checkbox-row">
+            <input v-model="draft.enabled" type="checkbox" />
+            Enabled
+          </label>
 
-        <p v-if="statusMessage" class="form-note">{{ statusMessage }}</p>
+          <p v-if="statusMessage" class="form-note">{{ statusMessage }}</p>
 
-        <div class="form-actions">
-          <button type="submit" :disabled="saving">
-            {{ saving ? 'Saving' : editingId ? 'Update provider' : 'Save provider' }}
-          </button>
-          <button v-if="editingId" class="secondary-button" type="button" @click="resetDraft">
-            Cancel
-          </button>
-        </div>
-      </form>
+          <div class="form-actions">
+            <button type="submit" :disabled="saving">
+              {{ saving ? 'Saving' : editingId ? 'Update provider' : 'Save provider' }}
+            </button>
+            <button v-if="editingId" class="secondary-button" type="button" @click="resetDraft">
+              Cancel
+            </button>
+          </div>
+        </form>
+
+        <form class="routing-panel" @submit.prevent="saveRouting">
+          <div class="section-heading">
+            <h2>Model routing</h2>
+            <button class="secondary-button" type="button" :disabled="loading" @click="() => loadRouting()">
+              Reload
+            </button>
+          </div>
+
+          <label>
+            Normal
+            <select v-model="routingDraft.normalProviderId">
+              <option value="">Auto</option>
+              <option v-for="provider in enabledProviders" :key="provider.id" :value="provider.id">
+                {{ providerLabel(provider) }}
+              </option>
+            </select>
+          </label>
+
+          <div class="route-grid">
+            <section class="route-group">
+              <h3>Collaborate</h3>
+              <label>
+                Planner
+                <select v-model="routingDraft.expertPlannerProviderId">
+                  <option value="">Auto</option>
+                  <option v-for="provider in enabledProviders" :key="provider.id" :value="provider.id">
+                    {{ providerLabel(provider) }}
+                  </option>
+                </select>
+              </label>
+
+              <div class="route-field">
+                <p>Expert pool</p>
+                <div class="route-option-list">
+                  <label v-for="provider in enabledProviders" :key="provider.id" class="route-option">
+                    <input
+                      type="checkbox"
+                      :checked="isRouteProviderSelected('expertProviderIds', provider.id)"
+                      @change="toggleRouteProvider('expertProviderIds', provider.id)"
+                    />
+                    <span>{{ providerLabel(provider) }}</span>
+                  </label>
+                </div>
+              </div>
+
+              <label>
+                Reviewer
+                <select v-model="routingDraft.expertReviewerProviderId">
+                  <option value="">Auto</option>
+                  <option v-for="provider in enabledProviders" :key="provider.id" :value="provider.id">
+                    {{ providerLabel(provider) }}
+                  </option>
+                </select>
+              </label>
+
+              <label>
+                Synthesizer
+                <select v-model="routingDraft.expertSynthesizerProviderId">
+                  <option value="">Auto</option>
+                  <option v-for="provider in enabledProviders" :key="provider.id" :value="provider.id">
+                    {{ providerLabel(provider) }}
+                  </option>
+                </select>
+              </label>
+            </section>
+
+            <section class="route-group">
+              <h3>Debate</h3>
+              <div class="route-field">
+                <p>Debater pool</p>
+                <div class="route-option-list">
+                  <label v-for="provider in enabledProviders" :key="provider.id" class="route-option">
+                    <input
+                      type="checkbox"
+                      :checked="isRouteProviderSelected('debateDebaterProviderIds', provider.id)"
+                      @change="toggleRouteProvider('debateDebaterProviderIds', provider.id)"
+                    />
+                    <span>{{ providerLabel(provider) }}</span>
+                  </label>
+                </div>
+              </div>
+
+              <label>
+                Synthesizer
+                <select v-model="routingDraft.debateSynthesizerProviderId">
+                  <option value="">Auto</option>
+                  <option v-for="provider in enabledProviders" :key="provider.id" :value="provider.id">
+                    {{ providerLabel(provider) }}
+                  </option>
+                </select>
+              </label>
+            </section>
+          </div>
+
+          <div v-if="routing" class="route-effective">
+            <p><strong>Normal:</strong> {{ providerRefLabel(routing.effective.normal) }}</p>
+            <p><strong>Collaborate pool:</strong> {{ providerListLabel(routing.effective.expert_providers) }}</p>
+            <p><strong>Debate pool:</strong> {{ providerListLabel(routing.effective.debate_debaters) }}</p>
+          </div>
+
+          <p v-if="routingMessage" class="form-note">{{ routingMessage }}</p>
+
+          <div class="form-actions">
+            <button type="submit" :disabled="savingRouting || !enabledProviders.length">
+              {{ savingRouting ? 'Saving' : 'Save routing' }}
+            </button>
+          </div>
+        </form>
+      </div>
 
       <section class="provider-section">
         <div class="section-heading">
           <h2>Saved providers</h2>
-          <button class="secondary-button" type="button" :disabled="loading" @click="() => loadProviders()">
+          <button class="secondary-button" type="button" :disabled="loading" @click="() => loadSettings()">
             Refresh
           </button>
         </div>

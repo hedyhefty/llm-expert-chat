@@ -61,6 +61,7 @@ button {
 .mode-toggle button,
 .composer button,
 .settings-form button,
+.routing-panel button,
 .provider-section button,
 .auth-form button,
 .text-button,
@@ -161,6 +162,7 @@ button {
 .auth-panel h1,
 .auth-panel p,
 .settings-form h2,
+.routing-panel h2,
 .provider-section h2,
 .provider-item h3 {
   margin: 0;
@@ -599,7 +601,9 @@ button {
 }
 
 .composer textarea,
-.settings-form input {
+.settings-form input,
+.settings-form select,
+.routing-panel select {
   width: 100%;
   border: 1px solid #c9c3b6;
   border-radius: 8px;
@@ -614,7 +618,8 @@ button {
 }
 
 .composer button,
-.settings-form button {
+.settings-form button,
+.routing-panel button {
   padding: 0 18px;
   color: #ffffff;
   background: #2e765e;
@@ -639,7 +644,15 @@ button {
   padding: 28px;
 }
 
-.settings-form {
+.settings-stack {
+  display: grid;
+  gap: 18px;
+  align-content: start;
+  min-height: 0;
+}
+
+.settings-form,
+.routing-panel {
   display: grid;
   gap: 18px;
   align-content: start;
@@ -649,14 +662,17 @@ button {
   background: #ffffff;
 }
 
-.settings-form label {
+.settings-form label,
+.routing-panel label {
   display: grid;
   gap: 8px;
   color: #4f565c;
   font-weight: 600;
 }
 
-.settings-form input {
+.settings-form input,
+.settings-form select,
+.routing-panel select {
   min-height: 42px;
   padding: 0 12px;
   font-weight: 400;
@@ -680,6 +696,79 @@ button {
   min-height: auto;
 }
 
+.route-grid {
+  display: grid;
+  gap: 16px;
+}
+
+.route-group {
+  display: grid;
+  gap: 14px;
+  padding-top: 14px;
+  border-top: 1px solid #e6e0d5;
+}
+
+.route-group h3,
+.route-field p {
+  margin: 0;
+}
+
+.route-group h3 {
+  color: #334047;
+  font-size: 15px;
+}
+
+.route-field {
+  display: grid;
+  gap: 8px;
+}
+
+.route-field p {
+  color: #4f565c;
+  font-weight: 600;
+}
+
+.route-option-list {
+  display: grid;
+  gap: 6px;
+  max-height: 150px;
+  overflow-y: auto;
+}
+
+.routing-panel .route-option {
+  display: flex;
+  align-items: start;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid #e6e0d5;
+  border-radius: 8px;
+  background: #fbfaf7;
+}
+
+.route-option input {
+  margin-top: 3px;
+}
+
+.route-option span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.route-effective {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid #e6e0d5;
+  border-radius: 8px;
+  background: #fbfaf7;
+}
+
+.route-effective p {
+  margin: 0;
+  color: #4f565c;
+  line-height: 1.5;
+}
+
 .form-note,
 .test-message,
 .empty-state {
@@ -701,6 +790,8 @@ button {
   justify-content: space-between;
 }
 
+.settings-form .secondary-button,
+.routing-panel .secondary-button,
 .secondary-button,
 .provider-section .secondary-button {
   color: #24313a;

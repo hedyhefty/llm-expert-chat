@@ -38,6 +38,37 @@ export type ProviderTestResponse = {
   message: string
 }
 
+export type ProviderRef = {
+  id: string
+  name: string
+  model: string
+  enabled: boolean
+}
+
+export type ModelRoutingEffective = {
+  normal: ProviderRef | null
+  expert_planner: ProviderRef | null
+  expert_providers: ProviderRef[]
+  expert_reviewer: ProviderRef | null
+  expert_synthesizer: ProviderRef | null
+  debate_debaters: ProviderRef[]
+  debate_synthesizer: ProviderRef | null
+}
+
+export type ModelRoutingPayload = {
+  normal_provider_id: string | null
+  expert_planner_provider_id: string | null
+  expert_provider_ids: string[]
+  expert_reviewer_provider_id: string | null
+  expert_synthesizer_provider_id: string | null
+  debate_debater_provider_ids: string[]
+  debate_synthesizer_provider_id: string | null
+}
+
+export type ModelRouting = ModelRoutingPayload & {
+  effective: ModelRoutingEffective
+}
+
 export type ConversationSummary = {
   id: string
   title: string
@@ -139,6 +170,17 @@ export async function deleteProvider(id: string): Promise<void> {
 
 export async function testProvider(id: string): Promise<ProviderTestResponse> {
   return apiFetch(`/api/providers/${id}/test`, { method: 'POST' })
+}
+
+export async function getModelRouting(): Promise<ModelRouting> {
+  return apiFetch('/api/providers/routing')
+}
+
+export async function updateModelRouting(payload: ModelRoutingPayload): Promise<ModelRouting> {
+  return apiFetch('/api/providers/routing', {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  })
 }
 
 export async function listConversations(): Promise<ConversationSummary[]> {

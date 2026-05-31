@@ -12,19 +12,26 @@ MAX_DEBATERS = 4
 
 
 class DebateTeam:
-    def __init__(self, providers: list[LLMProvider]) -> None:
-        if not providers:
+    def __init__(
+        self,
+        providers: list[LLMProvider],
+        debater_providers: list[LLMProvider] | None = None,
+        synthesizer_provider: LLMProvider | None = None,
+    ) -> None:
+        if not providers and not debater_providers:
             raise ValueError("Debate mode requires at least one enabled provider")
 
-        self.providers = providers
-        self.debater_count = min(MAX_DEBATERS, max(2, len(providers)))
+        self.providers = providers or list(debater_providers or [])
+        self.debater_providers = debater_providers or self.providers
+        self.synthesizer_provider = synthesizer_provider
+        self.debater_count = min(MAX_DEBATERS, max(2, len(self.debater_providers)))
 
     async def stream(self, message: str) -> AsyncIterator[ExpertStreamEvent]:
         debaters = [
             ExpertRole(
                 key=f"debater_{index + 1}",
                 title=f"Debater {index + 1}",
-                provider=self._provider_at(index),
+                provider=self._debater_provider_at(index),
             )
             for index in range(self.debater_count)
         ]
@@ -52,7 +59,7 @@ class DebateTeam:
         synthesizer_role = ExpertRole(
             key="synthesizer",
             title="Synthesizer",
-            provider=self._provider_at(self.debater_count),
+            provider=self.synthesizer_provider or self._provider_at(self.debater_count),
         )
         async for event in self._stream_role(
             synthesizer_role,
@@ -62,6 +69,9 @@ class DebateTeam:
 
     def _provider_at(self, index: int) -> LLMProvider:
         return self.providers[index % len(self.providers)]
+
+    def _debater_provider_at(self, index: int) -> LLMProvider:
+        return self.debater_providers[index % len(self.debater_providers)]
 
     async def _stream_many(
         self,

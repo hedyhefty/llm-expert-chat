@@ -10,9 +10,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
-from app.db.models import Conversation, ExpertOutput, LLMProvider, Message, MessageRole, TeamRun, User
+from app.db.models import Conversation, ExpertOutput, LLMProvider, Message, MessageRole, ModelRouteConfig, TeamRun, User
 from app.db.session import SessionLocal, get_db
 from app.services.orchestrator import ChatMode, ChatOrchestrator
+from app.services.model_routing import resolve_model_routes
 
 router = APIRouter()
 SSE_HEADERS = {
@@ -59,13 +60,15 @@ async def stream_chat(
         .where(LLMProvider.user_id == current_user.id, LLMProvider.enabled == 1)
         .order_by(LLMProvider.created_at.desc())
     ).all()
-    provider = providers[0] if providers else None
+    route_config = db.scalar(select(ModelRouteConfig).where(ModelRouteConfig.user_id == current_user.id))
+    routes = resolve_model_routes(list(providers), route_config)
     orchestrator = ChatOrchestrator()
     stream = orchestrator.stream_reply(
         message=request.message,
         mode=request.mode,
-        provider=provider,
-        providers=list(providers),
+        provider=routes.normal_provider,
+        providers=routes.enabled_providers,
+        routes=routes,
     )
     persistent_stream = _persisting_stream(
         stream=stream,

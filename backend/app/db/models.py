@@ -2,7 +2,7 @@ from datetime import datetime
 from enum import Enum
 from uuid import uuid4
 
-from sqlalchemy import DateTime, Enum as SQLEnum, ForeignKey, Integer, String, Text
+from sqlalchemy import DateTime, Enum as SQLEnum, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -69,6 +69,27 @@ class LLMProvider(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class ModelRouteConfig(Base):
+    __tablename__ = "model_route_configs"
+    __table_args__ = (UniqueConstraint("user_id", name="uq_model_route_configs_user_id"),)
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    normal_provider_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    expert_planner_provider_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    expert_provider_ids: Mapped[str] = mapped_column(Text, default="[]")
+    expert_reviewer_provider_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    expert_synthesizer_provider_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    debate_debater_provider_ids: Mapped[str] = mapped_column(Text, default="[]")
+    debate_synthesizer_provider_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
+
+
 class TeamRun(Base):
     __tablename__ = "team_runs"
 
@@ -102,4 +123,3 @@ class UsageLog(Base):
     completion_tokens: Mapped[int] = mapped_column(Integer, default=0)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-

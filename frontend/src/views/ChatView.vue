@@ -1,13 +1,15 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import type {
   ChatExpertEvent,
   ChatMode,
   ConversationExpert,
   ConversationMessage,
   ConversationSummary,
+  ModelRouting,
+  ProviderRef,
 } from '../api/client'
-import { createConversation, getConversation, streamChat } from '../api/client'
+import { createConversation, getConversation, getModelRouting, streamChat } from '../api/client'
 import { renderMarkdown } from '../utils/markdown'
 
 type ExpertDetail = {
@@ -53,8 +55,14 @@ const mode = ref<ChatMode>('normal')
 const input = ref('')
 const loading = ref(false)
 const loadingHistory = ref(false)
+const routing = ref<ModelRouting | null>(null)
 const currentConversationId = ref<string | null>(null)
 const messages = ref<Message[]>(readyMessages())
+const activeRouteLabel = computed(() => modeRouteLabel(mode.value))
+
+onMounted(() => {
+  void loadRouting()
+})
 
 watch(
   () => props.conversationId,
@@ -149,6 +157,14 @@ async function loadConversationMessages(conversationId: string | null) {
     ]
   } finally {
     loadingHistory.value = false
+  }
+}
+
+async function loadRouting() {
+  try {
+    routing.value = await getModelRouting()
+  } catch {
+    routing.value = null
   }
 }
 
@@ -417,6 +433,28 @@ function modeLabel(value: ChatMode): string {
   return 'Normal'
 }
 
+function modeRouteLabel(value: ChatMode): string {
+  const effective = routing.value?.effective
+  if (!effective) {
+    return ''
+  }
+
+  if (value === 'normal') {
+    return providerLabel(effective.normal)
+  }
+  if (value === 'expert') {
+    const expertCount = effective.expert_providers.length || 0
+    return `${expertCount || 'Auto'} experts · Synth: ${providerLabel(effective.expert_synthesizer)}`
+  }
+
+  const debaterCount = effective.debate_debaters.length || 0
+  return `${debaterCount || 'Auto'} debaters · Synth: ${providerLabel(effective.debate_synthesizer)}`
+}
+
+function providerLabel(provider: ProviderRef | null): string {
+  return provider ? `${provider.name} / ${provider.model}` : 'Auto'
+}
+
 function conversationTitle(content: string): string {
   const title = content.replace(/\s+/g, ' ').trim()
   return title ? title.slice(0, 60) : 'New chat'
@@ -465,7 +503,7 @@ function pendingLabel(message: Message): string {
     <header class="topbar">
       <div>
         <h1>LLM Expert Chat</h1>
-        <p>{{ modeLabel(mode) }}</p>
+        <p>{{ modeLabel(mode) }}<span v-if="activeRouteLabel"> · {{ activeRouteLabel }}</span></p>
       </div>
 
       <div class="mode-toggle" aria-label="Chat mode">

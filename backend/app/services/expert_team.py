@@ -56,15 +56,30 @@ class ExpertStreamEvent:
 
 
 class ExpertTeam:
-    def __init__(self, providers: list[LLMProvider]) -> None:
-        if not providers:
+    def __init__(
+        self,
+        providers: list[LLMProvider],
+        planner_provider: LLMProvider | None = None,
+        expert_providers: list[LLMProvider] | None = None,
+        reviewer_provider: LLMProvider | None = None,
+        synthesizer_provider: LLMProvider | None = None,
+    ) -> None:
+        if not providers and not expert_providers:
             raise ValueError("Expert mode requires at least one enabled provider")
 
-        self.providers = providers
-        self.max_experts = min(MAX_ADAPTIVE_EXPERTS, max(2, len(providers)))
+        self.providers = providers or list(expert_providers or [])
+        self.expert_providers = expert_providers or self.providers
+        self.planner_provider = planner_provider
+        self.reviewer_provider = reviewer_provider
+        self.synthesizer_provider = synthesizer_provider
+        self.max_experts = min(MAX_ADAPTIVE_EXPERTS, max(2, len(self.expert_providers)))
 
     async def stream(self, message: str) -> AsyncIterator[ExpertStreamEvent]:
-        planner_role = ExpertRole(key="planner", title="Team Planner", provider=self._provider_at(0))
+        planner_role = ExpertRole(
+            key="planner",
+            title="Team Planner",
+            provider=self.planner_provider or self._provider_at(0),
+        )
         yield self._start_event(planner_role)
         planner_result = await self._run_role(planner_role, self._planner_messages(message))
         plan = _parse_plan(planner_result.content, max_experts=self.max_experts, message=message)
@@ -87,7 +102,7 @@ class ExpertTeam:
             role = ExpertRole(
                 key=f"expert_{index + 1}",
                 title=planned_expert.title or f"Expert {index + 1}",
-                provider=self._provider_at(index),
+                provider=self._expert_provider_at(index),
             )
             content = ""
             reasoning = ""
@@ -110,7 +125,7 @@ class ExpertTeam:
         reviewer_role = ExpertRole(
             key="reviewer",
             title="Reviewer",
-            provider=self._provider_at(len(plan.experts)),
+            provider=self.reviewer_provider or self._provider_at(len(plan.experts)),
         )
         reviewer_result = RoleResult(content="")
         async for event in self._stream_role(reviewer_role, self._reviewer_messages(message, plan, expert_results)):
@@ -125,7 +140,7 @@ class ExpertTeam:
         synthesizer_role = ExpertRole(
             key="synthesizer",
             title="Synthesizer",
-            provider=self._provider_at(len(plan.experts) + 1),
+            provider=self.synthesizer_provider or self._provider_at(len(plan.experts) + 1),
         )
         async for event in self._stream_role(
             synthesizer_role,
@@ -135,6 +150,9 @@ class ExpertTeam:
 
     def _provider_at(self, index: int) -> LLMProvider:
         return self.providers[index % len(self.providers)]
+
+    def _expert_provider_at(self, index: int) -> LLMProvider:
+        return self.expert_providers[index % len(self.expert_providers)]
 
     def _start_event(self, role: ExpertRole) -> ExpertStreamEvent:
         return ExpertStreamEvent(

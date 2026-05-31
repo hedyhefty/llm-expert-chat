@@ -10,6 +10,7 @@ from app.db.models import LLMProvider
 from app.services.debate_team import DebateTeam
 from app.services.expert_team import ExpertTeam
 from app.services.llm_provider import OpenAICompatibleClient
+from app.services.model_routing import ModelRoutes
 
 
 class ChatMode(str, Enum):
@@ -31,14 +32,33 @@ class ChatOrchestrator:
         mode: ChatMode,
         provider: LLMProvider | None = None,
         providers: list[LLMProvider] | None = None,
+        routes: ModelRoutes | None = None,
     ) -> AsyncIterator[str]:
         if mode in {ChatMode.EXPERT, ChatMode.DEBATE}:
-            expert_providers = providers or ([provider] if provider is not None else [])
+            expert_providers = (
+                routes.enabled_providers
+                if routes
+                else providers or ([provider] if provider is not None else [])
+            )
             if not expert_providers:
                 yield _to_sse(f"{mode.value.title()} mode needs at least one enabled provider.")
                 return
 
-            team = DebateTeam(expert_providers) if mode == ChatMode.DEBATE else ExpertTeam(expert_providers)
+            team = (
+                DebateTeam(
+                    expert_providers,
+                    debater_providers=routes.debate.debater_providers if routes else None,
+                    synthesizer_provider=routes.debate.synthesizer_provider if routes else None,
+                )
+                if mode == ChatMode.DEBATE
+                else ExpertTeam(
+                    expert_providers,
+                    planner_provider=routes.expert.planner_provider if routes else None,
+                    expert_providers=routes.expert.expert_providers if routes else None,
+                    reviewer_provider=routes.expert.reviewer_provider if routes else None,
+                    synthesizer_provider=routes.expert.synthesizer_provider if routes else None,
+                )
+            )
             async for event in team.stream(message):
                 yield _to_json_sse(event.event, asdict(event))
                 if event.role == "synthesizer" and event.event == "expert_delta":
