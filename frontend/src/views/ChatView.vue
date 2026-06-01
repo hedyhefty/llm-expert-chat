@@ -406,6 +406,58 @@ function visibleActivities(message: Message): TeamActivity[] {
   return message.activities?.filter((activity) => activity.status !== 'pending') ?? []
 }
 
+function orderedExperts(message: Message): ExpertDetail[] {
+  const experts = message.experts ?? []
+  return [...experts].sort((left, right) => {
+    const leftKey = expertSortKey(left.role, message.mode)
+    const rightKey = expertSortKey(right.role, message.mode)
+    return (
+      leftKey.group - rightKey.group ||
+      leftKey.index - rightKey.index ||
+      leftKey.role.localeCompare(rightKey.role)
+    )
+  })
+}
+
+function expertSortKey(role: string, mode?: ChatMode): { group: number; index: number; role: string } {
+  if (mode === 'debate') {
+    const debaterMatch = role.match(/^debater_(\d+)$/)
+    if (debaterMatch) {
+      return { group: 0, index: Number(debaterMatch[1]), role }
+    }
+
+    const responseMatch = role.match(/^debater_(\d+)_response$/)
+    if (responseMatch) {
+      return { group: 1, index: Number(responseMatch[1]), role }
+    }
+
+    if (role === 'synthesizer') {
+      return { group: 2, index: 0, role }
+    }
+
+    return { group: 99, index: 0, role }
+  }
+
+  if (role === 'planner') {
+    return { group: 0, index: 0, role }
+  }
+
+  const expertMatch = role.match(/^expert_(\d+)$/)
+  if (expertMatch) {
+    return { group: 1, index: Number(expertMatch[1]), role }
+  }
+
+  if (role === 'reviewer') {
+    return { group: 2, index: 0, role }
+  }
+
+  if (role === 'synthesizer') {
+    return { group: 3, index: 0, role }
+  }
+
+  return { group: 99, index: 0, role }
+}
+
 function debateStatus(event: ChatExpertEvent): string {
   if (event.role === 'synthesizer') {
     return event.event === 'expert_done' ? 'Finalizing answer' : 'Synthesizer is writing final answer'
@@ -545,7 +597,7 @@ function pendingLabel(message: Message): string {
           </details>
           <details v-if="message.experts?.length" class="experts-panel">
             <summary>Team details</summary>
-            <details v-for="expert in message.experts" :key="expert.role" class="expert-detail">
+            <details v-for="expert in orderedExperts(message)" :key="expert.role" class="expert-detail">
               <summary>
                 <div class="expert-summary-content">
                   <div>

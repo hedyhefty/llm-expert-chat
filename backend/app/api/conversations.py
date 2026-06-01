@@ -1,14 +1,15 @@
 from datetime import datetime
 import json
+import re
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import case, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
-from app.db.models import Conversation, ExpertOutput, Message, TeamRun, User
+from app.db.models import Conversation, ExpertOutput, Message, MessageRole, TeamRun, User
 from app.db.session import get_db
 
 router = APIRouter()
@@ -45,7 +46,7 @@ class ConversationMessageRead(BaseModel):
     created_at: datetime
     mode: str | None = None
     reasoning: str = ""
-    experts: list[ExpertOutputRead] = []
+    experts: list[ExpertOutputRead] = Field(default_factory=list)
 
 
 class ConversationDetailRead(ConversationRead):
@@ -91,7 +92,10 @@ async def get_conversation(
         db.scalars(
             select(Message)
             .where(Message.conversation_id == conversation.id)
-            .order_by(Message.created_at.asc())
+            .order_by(
+                Message.created_at.asc(),
+                case((Message.role == MessageRole.USER, 0), else_=1).asc(),
+            )
         )
     )
     team_runs = list(
@@ -154,10 +158,10 @@ def _message_read(
 ) -> ConversationMessageRead:
     experts: list[ExpertOutputRead] = []
     if team_run is not None:
-        experts = [
-            _expert_output_read(output)
-            for output in outputs_by_run_id.get(team_run.id, [])
-        ]
+        experts = _sort_experts(
+            [_expert_output_read(output) for output in outputs_by_run_id.get(team_run.id, [])],
+            team_run.mode,
+        )
 
     synthesizer = next((expert for expert in experts if expert.role == "synthesizer"), None)
     return ConversationMessageRead(
@@ -202,6 +206,34 @@ def _json_dict(value: str) -> dict[str, Any]:
 
 def _string_value(value: object, fallback: str) -> str:
     return value if isinstance(value, str) else fallback
+
+
+def _sort_experts(experts: list[ExpertOutputRead], mode: str | None) -> list[ExpertOutputRead]:
+    if mode == "debate":
+        return sorted(experts, key=lambda expert: _debate_role_sort_key(expert.role))
+    return sorted(experts, key=lambda expert: _collaboration_role_sort_key(expert.role))
+
+
+def _debate_role_sort_key(role: str) -> tuple[int, int, str]:
+    if match := re.fullmatch(r"debater_(\d+)", role):
+        return (0, int(match.group(1)), role)
+    if match := re.fullmatch(r"debater_(\d+)_response", role):
+        return (1, int(match.group(1)), role)
+    if role == "synthesizer":
+        return (2, 0, role)
+    return (99, 0, role)
+
+
+def _collaboration_role_sort_key(role: str) -> tuple[int, int, str]:
+    if role == "planner":
+        return (0, 0, role)
+    if match := re.fullmatch(r"expert_(\d+)", role):
+        return (1, int(match.group(1)), role)
+    if role == "reviewer":
+        return (2, 0, role)
+    if role == "synthesizer":
+        return (3, 0, role)
+    return (99, 0, role)
 
 
 def _clean_title(title: str) -> str:

@@ -1,6 +1,7 @@
 from typing import Annotated
 from datetime import datetime
 import json
+import re
 
 from fastapi import APIRouter, HTTPException, status
 from fastapi import Depends
@@ -183,7 +184,7 @@ def _save_team_outputs(
         )
         db.add(team_run)
         db.flush()
-        for output in expert_outputs.values():
+        for output in _ordered_expert_outputs(expert_outputs, mode):
             db.add(
                 ExpertOutput(
                     team_run_id=team_run.id,
@@ -246,6 +247,37 @@ def _capture_expert_event(expert_outputs: dict[str, dict[str, object]], data: st
             output["reasoning"] = payload["reasoning"]
         output["error"] = payload.get("error") if isinstance(payload.get("error"), str) else None
         output["done"] = True
+
+
+def _ordered_expert_outputs(
+    expert_outputs: dict[str, dict[str, object]],
+    mode: ChatMode,
+) -> list[dict[str, object]]:
+    return sorted(
+        expert_outputs.values(),
+        key=lambda output: _role_sort_key(str(output.get("role") or ""), mode),
+    )
+
+
+def _role_sort_key(role: str, mode: ChatMode) -> tuple[int, int, str]:
+    if mode == ChatMode.DEBATE:
+        if match := re.fullmatch(r"debater_(\d+)", role):
+            return (0, int(match.group(1)), role)
+        if match := re.fullmatch(r"debater_(\d+)_response", role):
+            return (1, int(match.group(1)), role)
+        if role == "synthesizer":
+            return (2, 0, role)
+        return (99, 0, role)
+
+    if role == "planner":
+        return (0, 0, role)
+    if match := re.fullmatch(r"expert_(\d+)", role):
+        return (1, int(match.group(1)), role)
+    if role == "reviewer":
+        return (2, 0, role)
+    if role == "synthesizer":
+        return (3, 0, role)
+    return (99, 0, role)
 
 
 def _conversation_title(message: str) -> str:
