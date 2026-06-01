@@ -209,6 +209,17 @@ export async function createConversation(title: string): Promise<ConversationSum
   })
 }
 
+export async function updateConversation(id: string, title: string): Promise<ConversationSummary> {
+  return apiFetch(`/api/conversations/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ title }),
+  })
+}
+
+export async function deleteConversation(id: string): Promise<void> {
+  await apiFetch(`/api/conversations/${id}`, { method: 'DELETE' })
+}
+
 export async function getConversation(id: string): Promise<ConversationDetail> {
   return apiFetch(`/api/conversations/${id}`)
 }

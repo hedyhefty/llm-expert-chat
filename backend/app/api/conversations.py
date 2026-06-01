@@ -3,9 +3,9 @@ import json
 import re
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, Field
-from sqlalchemy import case, select
+from sqlalchemy import case, delete, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
@@ -17,6 +17,10 @@ router = APIRouter()
 
 class ConversationCreate(BaseModel):
     title: str = Field(default="New chat", max_length=255)
+
+
+class ConversationUpdate(BaseModel):
+    title: str = Field(min_length=1, max_length=255)
 
 
 class ConversationRead(BaseModel):
@@ -82,6 +86,34 @@ async def create_conversation(
     return conversation
 
 
+@router.patch("/{conversation_id}", response_model=ConversationRead)
+async def update_conversation(
+    conversation_id: str,
+    request: ConversationUpdate,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> Conversation:
+    conversation = _get_user_conversation(db, current_user, conversation_id)
+    conversation.title = _clean_title(request.title)
+    conversation.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(conversation)
+    return conversation
+
+
+@router.delete("/{conversation_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_conversation(
+    conversation_id: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> Response:
+    conversation = _get_user_conversation(db, current_user, conversation_id)
+    _delete_conversation_children(db, conversation.id)
+    db.delete(conversation)
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @router.get("/{conversation_id}", response_model=ConversationDetailRead)
 async def get_conversation(
     conversation_id: str,
@@ -129,6 +161,17 @@ def _get_user_conversation(db: Session, user: User, conversation_id: str) -> Con
     if conversation is None or conversation.user_id != user.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
     return conversation
+
+
+def _delete_conversation_children(db: Session, conversation_id: str) -> None:
+    team_runs = list(
+        db.scalars(select(TeamRun).where(TeamRun.conversation_id == conversation_id))
+    )
+    team_run_ids = [team_run.id for team_run in team_runs]
+    if team_run_ids:
+        db.execute(delete(ExpertOutput).where(ExpertOutput.team_run_id.in_(team_run_ids)))
+        db.execute(delete(TeamRun).where(TeamRun.id.in_(team_run_ids)))
+    db.execute(delete(Message).where(Message.conversation_id == conversation_id))
 
 
 def _load_outputs_by_run_id(

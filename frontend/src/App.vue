@@ -1,7 +1,15 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import type { AuthResponse, ConversationSummary, User } from './api/client'
-import { clearAuthToken, getAuthToken, getMe, listConversations, setAuthToken } from './api/client'
+import {
+  clearAuthToken,
+  deleteConversation,
+  getAuthToken,
+  getMe,
+  listConversations,
+  setAuthToken,
+  updateConversation,
+} from './api/client'
 import AuthView from './views/AuthView.vue'
 import ChatView from './views/ChatView.vue'
 import SettingsView from './views/SettingsView.vue'
@@ -13,6 +21,9 @@ const booting = ref(true)
 const user = ref<User | null>(null)
 const conversations = ref<ConversationSummary[]>([])
 const activeConversationId = ref<string | null>(null)
+const editingConversationId = ref<string | null>(null)
+const editingConversationTitle = ref('')
+const conversationError = ref('')
 
 onMounted(async () => {
   if (!getAuthToken()) {
@@ -58,6 +69,54 @@ function selectConversation(conversationId: string) {
   activeConversationId.value = conversationId
 }
 
+function startRename(conversation: ConversationSummary) {
+  conversationError.value = ''
+  editingConversationId.value = conversation.id
+  editingConversationTitle.value = conversation.title
+}
+
+function cancelRename() {
+  editingConversationId.value = null
+  editingConversationTitle.value = ''
+}
+
+async function saveRename() {
+  const conversationId = editingConversationId.value
+  const title = editingConversationTitle.value.trim()
+  if (!conversationId || !title) {
+    return
+  }
+
+  try {
+    await updateConversation(conversationId, title)
+    cancelRename()
+    await loadConversations()
+  } catch (error) {
+    conversationError.value = error instanceof Error ? error.message : 'Failed to rename conversation'
+  }
+}
+
+async function removeConversation(conversation: ConversationSummary) {
+  conversationError.value = ''
+  if (!window.confirm(`Delete "${conversation.title}"?`)) {
+    return
+  }
+
+  try {
+    await deleteConversation(conversation.id)
+    if (activeConversationId.value === conversation.id) {
+      activeConversationId.value = null
+      activeView.value = 'chat'
+    }
+    if (editingConversationId.value === conversation.id) {
+      cancelRename()
+    }
+    await loadConversations()
+  } catch (error) {
+    conversationError.value = error instanceof Error ? error.message : 'Failed to delete conversation'
+  }
+}
+
 async function handleConversationCreated(conversation: ConversationSummary) {
   activeConversationId.value = conversation.id
   await loadConversations()
@@ -81,14 +140,31 @@ async function handleConversationUpdated() {
         <button :class="{ active: activeView === 'settings' }" @click="activeView = 'settings'">Settings</button>
       </nav>
       <div class="conversation-list">
-        <button
+        <div
           v-for="conversation in conversations"
           :key="conversation.id"
-          :class="{ active: activeConversationId === conversation.id && activeView === 'chat' }"
-          @click="selectConversation(conversation.id)"
+          :class="['conversation-item', { active: activeConversationId === conversation.id && activeView === 'chat' }]"
         >
-          {{ conversation.title }}
-        </button>
+          <form
+            v-if="editingConversationId === conversation.id"
+            class="conversation-edit"
+            @submit.prevent="saveRename"
+          >
+            <input v-model="editingConversationTitle" maxlength="255" @keydown.esc.prevent="cancelRename" />
+            <button type="submit">Save</button>
+            <button type="button" @click="cancelRename">Cancel</button>
+          </form>
+          <template v-else>
+            <button class="conversation-title" @click="selectConversation(conversation.id)">
+              {{ conversation.title }}
+            </button>
+            <div class="conversation-actions">
+              <button type="button" @click="startRename(conversation)">Rename</button>
+              <button type="button" @click="removeConversation(conversation)">Delete</button>
+            </div>
+          </template>
+        </div>
+        <p v-if="conversationError" class="conversation-error">{{ conversationError }}</p>
       </div>
       <div class="account-block">
         <span>{{ user.email }}</span>
