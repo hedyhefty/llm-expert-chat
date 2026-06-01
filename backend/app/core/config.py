@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     secret_key: str = "change-me"
     api_key_master_secret: str = "change-me-32-byte-minimum-secret"
     access_token_expire_minutes: int = 60 * 24 * 7
+    llm_request_timeout_seconds: float = 120
     cors_origins_raw: str = Field(default="http://localhost:5173", alias="CORS_ORIGINS")
 
     mysql_host: str = "localhost"

@@ -43,6 +43,7 @@ class ConversationMessageRead(BaseModel):
     id: str
     role: Literal["user", "assistant"]
     content: str
+    status: str
     created_at: datetime
     mode: str | None = None
     reasoning: str = ""
@@ -168,6 +169,7 @@ def _message_read(
         id=message.id,
         role=message.role.value,  # type: ignore[arg-type]
         content=message.content,
+        status=message.status,
         created_at=message.created_at,
         mode=team_run.mode if team_run is not None else None,
         reasoning=synthesizer.reasoning if synthesizer is not None else "",

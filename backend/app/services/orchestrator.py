@@ -69,32 +69,48 @@ class ChatOrchestrator:
             yield "event: done\ndata: [DONE]\n\n"
             return
 
-        if provider is None:
+        normal_providers = _normal_provider_candidates(provider, providers)
+        if not normal_providers:
             yield _to_sse("Normal chat placeholder. Configure a provider to enable real LLM responses.")
             return
 
-        client = OpenAICompatibleClient(
-            base_url=provider.base_url,
-            api_key=decrypt_secret(provider.encrypted_api_key),
-            model=provider.model,
-        )
         messages = [{"role": "user", "content": message}]
+        errors: list[str] = []
 
-        splitter = ReasoningSplitter()
-        try:
-            async for chunk in client.stream_chat(messages):
-                if chunk.event == "reasoning":
-                    yield _to_sse(chunk.content, event="reasoning")
-                    continue
+        for candidate in normal_providers:
+            client = OpenAICompatibleClient(
+                base_url=candidate.base_url,
+                api_key=decrypt_secret(candidate.encrypted_api_key),
+                model=candidate.model,
+            )
+            splitter = ReasoningSplitter()
+            emitted_content = False
+            try:
+                async for chunk in client.stream_chat(messages):
+                    if chunk.event == "reasoning":
+                        yield _to_sse(chunk.content, event="reasoning")
+                        continue
 
-                for part in splitter.feed(chunk.content):
+                    for part in splitter.feed(chunk.content):
+                        emitted_content = True
+                        yield _to_sse(part.content, event=part.event)
+                for part in splitter.flush():
+                    emitted_content = True
                     yield _to_sse(part.content, event=part.event)
-            for part in splitter.flush():
-                yield _to_sse(part.content, event=part.event)
-        except httpx.HTTPError as error:
-            yield _to_sse(f"Provider request failed: {error}")
-        else:
+            except httpx.HTTPError as error:
+                errors.append(f"{candidate.name} / {candidate.model}: {error}")
+                if emitted_content:
+                    yield _to_sse(f"\n\nProvider stream interrupted: {error}")
+                    yield "event: done\ndata: [DONE]\n\n"
+                    return
+                continue
+
             yield "event: done\ndata: [DONE]\n\n"
+            return
+
+        detail = "; ".join(errors) if errors else "No provider returned a response."
+        yield _to_sse(f"All configured providers failed: {detail}")
+        yield "event: done\ndata: [DONE]\n\n"
 
 
 def _to_sse(data: str, event: str | None = None) -> str:
@@ -105,6 +121,19 @@ def _to_sse(data: str, event: str | None = None) -> str:
 
 def _to_json_sse(event: str, data: dict[str, object]) -> str:
     return _to_sse(json.dumps(data, ensure_ascii=False), event=event)
+
+
+def _normal_provider_candidates(
+    provider: LLMProvider | None,
+    providers: list[LLMProvider] | None,
+) -> list[LLMProvider]:
+    candidates: list[LLMProvider] = []
+    if provider is not None:
+        candidates.append(provider)
+    for candidate in providers or []:
+        if all(existing.id != candidate.id for existing in candidates):
+            candidates.append(candidate)
+    return candidates
 
 
 class ReasoningSplitter:

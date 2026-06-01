@@ -51,6 +51,7 @@ class Message(Base):
     conversation_id: Mapped[str] = mapped_column(ForeignKey("conversations.id"), index=True)
     role: Mapped[MessageRole] = mapped_column(SQLEnum(MessageRole))
     content: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(20), default="completed")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     conversation: Mapped[Conversation] = relationship(back_populates="messages")

@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException, status
 from fastapi import Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
@@ -28,6 +28,8 @@ class ChatStreamRequest(BaseModel):
     message: str
     mode: ChatMode = ChatMode.NORMAL
     conversation_id: str | None = None
+    replace_assistant_message_id: str | None = None
+    source_user_message_id: str | None = None
 
 
 @router.post("/stream")
@@ -37,24 +39,7 @@ async def stream_chat(
     db: Annotated[Session, Depends(get_db)],
 ) -> StreamingResponse:
     conversation = _get_or_create_conversation(db, current_user, request)
-    user_message = Message(
-        conversation_id=conversation.id,
-        role=MessageRole.USER,
-        content=request.message,
-    )
-    assistant_message = Message(
-        conversation_id=conversation.id,
-        role=MessageRole.ASSISTANT,
-        content="",
-    )
-    conversation.updated_at = datetime.utcnow()
-    if conversation.title == "New chat":
-        conversation.title = _conversation_title(request.message)
-    db.add(user_message)
-    db.add(assistant_message)
-    db.commit()
-    db.refresh(user_message)
-    db.refresh(assistant_message)
+    user_message, assistant_message = _prepare_stream_messages(db, current_user, conversation, request)
 
     providers = db.scalars(
         select(LLMProvider)
@@ -65,7 +50,7 @@ async def stream_chat(
     routes = resolve_model_routes(list(providers), route_config)
     orchestrator = ChatOrchestrator()
     stream = orchestrator.stream_reply(
-        message=request.message,
+        message=user_message.content,
         mode=request.mode,
         provider=routes.normal_provider,
         providers=routes.enabled_providers,
@@ -102,6 +87,122 @@ def _get_or_create_conversation(
     return conversation
 
 
+def _prepare_stream_messages(
+    db: Session,
+    current_user: User,
+    conversation: Conversation,
+    request: ChatStreamRequest,
+) -> tuple[Message, Message]:
+    if request.replace_assistant_message_id:
+        return _prepare_regeneration_messages(db, current_user, conversation, request)
+    return _create_stream_messages(db, conversation, request)
+
+
+def _create_stream_messages(
+    db: Session,
+    conversation: Conversation,
+    request: ChatStreamRequest,
+) -> tuple[Message, Message]:
+    user_message = Message(
+        conversation_id=conversation.id,
+        role=MessageRole.USER,
+        content=request.message,
+        status="completed",
+    )
+    assistant_message = Message(
+        conversation_id=conversation.id,
+        role=MessageRole.ASSISTANT,
+        content="",
+        status="generating",
+    )
+    conversation.updated_at = datetime.utcnow()
+    if conversation.title == "New chat":
+        conversation.title = _conversation_title(request.message)
+    db.add(user_message)
+    db.add(assistant_message)
+    db.commit()
+    db.refresh(user_message)
+    db.refresh(assistant_message)
+    return user_message, assistant_message
+
+
+def _prepare_regeneration_messages(
+    db: Session,
+    current_user: User,
+    conversation: Conversation,
+    request: ChatStreamRequest,
+) -> tuple[Message, Message]:
+    assistant_message = db.get(Message, request.replace_assistant_message_id)
+    if (
+        assistant_message is None
+        or assistant_message.conversation_id != conversation.id
+        or assistant_message.role != MessageRole.ASSISTANT
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assistant message not found")
+
+    user_message = _get_regeneration_user_message(db, conversation, assistant_message, request)
+    if user_message.conversation_id != conversation.id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Source message mismatch")
+
+    _delete_assistant_team_runs(db, assistant_message.id)
+    assistant_message.content = ""
+    assistant_message.status = "generating"
+    conversation.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(user_message)
+    db.refresh(assistant_message)
+    return user_message, assistant_message
+
+
+def _get_regeneration_user_message(
+    db: Session,
+    conversation: Conversation,
+    assistant_message: Message,
+    request: ChatStreamRequest,
+) -> Message:
+    if request.source_user_message_id:
+        user_message = db.get(Message, request.source_user_message_id)
+        if (
+            user_message is None
+            or user_message.conversation_id != conversation.id
+            or user_message.role != MessageRole.USER
+        ):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Source user message not found")
+        return user_message
+
+    team_run = db.scalar(select(TeamRun).where(TeamRun.assistant_message_id == assistant_message.id))
+    if team_run is not None:
+        user_message = db.get(Message, team_run.user_message_id)
+        if user_message is not None and user_message.role == MessageRole.USER:
+            return user_message
+
+    user_message = db.scalar(
+        select(Message)
+        .where(
+            Message.conversation_id == conversation.id,
+            Message.role == MessageRole.USER,
+            Message.created_at <= assistant_message.created_at,
+        )
+        .order_by(Message.created_at.desc())
+        .limit(1)
+    )
+    if user_message is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No source user message found")
+    return user_message
+
+
+def _delete_assistant_team_runs(db: Session, assistant_message_id: str) -> None:
+    team_runs = list(
+        db.scalars(select(TeamRun).where(TeamRun.assistant_message_id == assistant_message_id))
+    )
+    team_run_ids = [team_run.id for team_run in team_runs]
+    if not team_run_ids:
+        return
+
+    db.execute(delete(ExpertOutput).where(ExpertOutput.team_run_id.in_(team_run_ids)))
+    db.execute(delete(TeamRun).where(TeamRun.id.in_(team_run_ids)))
+
+
 async def _persisting_stream(
     stream,
     conversation_id: str,
@@ -111,16 +212,32 @@ async def _persisting_stream(
 ):
     assistant_content = ""
     expert_outputs: dict[str, dict[str, object]] = {}
+    completed = False
+    failed = False
 
     try:
+        yield _to_json_sse(
+            "meta",
+            {
+                "conversation_id": conversation_id,
+                "user_message_id": user_message_id,
+                "assistant_message_id": assistant_message_id,
+                "mode": mode.value,
+            },
+        )
         async for chunk in stream:
             event_type, data = _parse_sse(chunk)
-            if data != "[DONE]":
+            if event_type == "done" and data == "[DONE]":
+                completed = True
+            elif data != "[DONE]":
                 if event_type == "message":
                     assistant_content += data
                 elif event_type.startswith("expert_"):
                     _capture_expert_event(expert_outputs, data)
             yield chunk
+    except Exception:
+        failed = True
+        raise
     finally:
         _save_stream_result(
             conversation_id=conversation_id,
@@ -129,6 +246,7 @@ async def _persisting_stream(
             assistant_content=assistant_content,
             expert_outputs=expert_outputs,
             mode=mode,
+            result_status=_stream_result_status(completed, failed),
         )
 
 
@@ -139,6 +257,7 @@ def _save_stream_result(
     assistant_content: str,
     expert_outputs: dict[str, dict[str, object]],
     mode: ChatMode,
+    result_status: str,
 ) -> None:
     db = SessionLocal()
     try:
@@ -148,6 +267,7 @@ def _save_stream_result(
             return
 
         assistant_message.content = assistant_content
+        assistant_message.status = result_status
         conversation.updated_at = datetime.utcnow()
 
         existing_team_run = db.scalar(
@@ -193,6 +313,24 @@ def _save_team_outputs(
                     content=json.dumps(output, ensure_ascii=False),
                 )
             )
+
+
+def _stream_result_status(completed: bool, failed: bool) -> str:
+    if completed:
+        return "completed"
+    if failed:
+        return "failed"
+    return "interrupted"
+
+
+def _to_sse(data: str, event: str | None = None) -> str:
+    lines = data.splitlines() or [""]
+    event_line = f"event: {event}\n" if event else ""
+    return event_line + "".join(f"data: {line}\n" for line in lines) + "\n"
+
+
+def _to_json_sse(event: str, data: dict[str, object]) -> str:
+    return _to_sse(json.dumps(data, ensure_ascii=False), event=event)
 
 
 def _parse_sse(chunk: str) -> tuple[str, str]:

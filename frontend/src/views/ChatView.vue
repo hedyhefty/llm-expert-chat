@@ -3,6 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import type {
   ChatExpertEvent,
   ChatMode,
+  ChatStreamMeta,
   ConversationExpert,
   ConversationMessage,
   ConversationSummary,
@@ -23,6 +24,7 @@ type ExpertDetail = {
   error?: string
 }
 type ActivityStatus = 'pending' | 'running' | 'done'
+type MessageGenerationStatus = 'completed' | 'generating' | 'interrupted' | 'failed'
 type TeamActivity = {
   key: string
   label: string
@@ -37,6 +39,7 @@ type Message = {
   experts?: ExpertDetail[]
   activities?: TeamActivity[]
   status?: string
+  generationStatus?: MessageGenerationStatus
 }
 type AssistantParts = {
   answer: string
@@ -56,6 +59,8 @@ const input = ref('')
 const loading = ref(false)
 const loadingHistory = ref(false)
 const routing = ref<ModelRouting | null>(null)
+const activeAbortController = ref<AbortController | null>(null)
+const activeAssistantMessage = ref<Message | null>(null)
 const currentConversationId = ref<string | null>(null)
 const messages = ref<Message[]>(readyMessages())
 const activeRouteLabel = computed(() => modeRouteLabel(mode.value))
@@ -90,24 +95,103 @@ async function sendMessage() {
     emit('conversationCreated', conversation)
   }
 
-  messages.value.push({ id: crypto.randomUUID(), role: 'user', content })
+  const userMessage: Message = {
+    id: crypto.randomUUID(),
+    role: 'user',
+    content,
+    generationStatus: 'completed',
+  }
+  const assistantMessage: Message = {
+    id: crypto.randomUUID(),
+    role: 'assistant',
+    content: '',
+    mode: mode.value,
+    activities: mode.value === 'debate' ? createDebateActivities() : undefined,
+    status: initialStatus(mode.value),
+    generationStatus: 'generating',
+  }
+  messages.value.push(userMessage)
   const assistantIndex =
-    messages.value.push({
-      id: crypto.randomUUID(),
-      role: 'assistant',
-      content: '',
-      mode: mode.value,
-      activities: mode.value === 'debate' ? createDebateActivities() : undefined,
-      status: initialStatus(mode.value),
-    }) - 1
-  const assistantMessage = messages.value[assistantIndex]
+    messages.value.push(assistantMessage) - 1
   input.value = ''
+
+  await runGeneration({
+    content,
+    mode: mode.value,
+    conversationId,
+    userMessage,
+    assistantMessage: messages.value[assistantIndex],
+  })
+}
+
+async function regenerateMessage(assistantMessage: Message) {
+  if (loading.value || loadingHistory.value) {
+    return
+  }
+
+  const userMessage = previousUserMessage(assistantMessage)
+  const conversationId = currentConversationId.value
+  if (!userMessage || !conversationId) {
+    return
+  }
+
+  const generationMode = assistantMessage.mode ?? mode.value
+  assistantMessage.content = ''
+  assistantMessage.reasoning = ''
+  assistantMessage.experts = undefined
+  assistantMessage.activities = generationMode === 'debate' ? createDebateActivities() : undefined
+  assistantMessage.status = initialStatus(generationMode)
+  assistantMessage.mode = generationMode
+  assistantMessage.generationStatus = 'generating'
+
+  await runGeneration({
+    content: userMessage.content,
+    mode: generationMode,
+    conversationId,
+    userMessage,
+    assistantMessage,
+    replaceAssistantMessageId: assistantMessage.id,
+    sourceUserMessageId: userMessage.id,
+  })
+}
+
+function stopGeneration() {
+  if (!loading.value || !activeAbortController.value) {
+    return
+  }
+
+  if (activeAssistantMessage.value) {
+    activeAssistantMessage.value.status = 'Stopping'
+  }
+  activeAbortController.value.abort()
+}
+
+async function runGeneration({
+  content,
+  mode,
+  conversationId,
+  userMessage,
+  assistantMessage,
+  replaceAssistantMessageId,
+  sourceUserMessageId,
+}: {
+  content: string
+  mode: ChatMode
+  conversationId: string
+  userMessage: Message
+  assistantMessage: Message
+  replaceAssistantMessageId?: string
+  sourceUserMessageId?: string
+}) {
+  const abortController = new AbortController()
+  activeAbortController.value = abortController
+  activeAssistantMessage.value = assistantMessage
   loading.value = true
 
   try {
     await streamChat(
       content,
-      mode.value,
+      mode,
       conversationId,
       (token) => {
         assistantMessage.status =
@@ -124,12 +208,31 @@ async function sendMessage() {
       (event) => {
         applyExpertEvent(assistantMessage, event)
       },
+      {
+        signal: abortController.signal,
+        replaceAssistantMessageId,
+        sourceUserMessageId,
+        onMeta: (meta) => {
+          applyStreamMeta(meta, userMessage, assistantMessage)
+        },
+      },
     )
+    assistantMessage.generationStatus = 'completed'
   } catch (error) {
-    assistantMessage.content = error instanceof Error ? error.message : 'Request failed'
+    if (isAbortError(error)) {
+      assistantMessage.generationStatus = 'interrupted'
+      if (!assistantMessage.content.trim()) {
+        assistantMessage.content = 'Generation stopped.'
+      }
+    } else {
+      assistantMessage.generationStatus = 'failed'
+      assistantMessage.content = error instanceof Error ? error.message : 'Request failed'
+    }
   } finally {
     assistantMessage.status = undefined
     loading.value = false
+    activeAbortController.value = null
+    activeAssistantMessage.value = null
     emit('conversationUpdated', conversationId)
   }
 }
@@ -186,7 +289,62 @@ function savedMessageToMessage(message: ConversationMessage): Message {
     mode: message.mode ?? undefined,
     reasoning: message.reasoning || undefined,
     experts: message.experts?.map(savedExpertToDetail),
+    generationStatus: normalizeGenerationStatus(message.status),
   }
+}
+
+function normalizeGenerationStatus(status: string): MessageGenerationStatus {
+  if (status === 'generating' || status === 'interrupted' || status === 'failed') {
+    return status
+  }
+  return 'completed'
+}
+
+function applyStreamMeta(meta: ChatStreamMeta, userMessage: Message, assistantMessage: Message) {
+  currentConversationId.value = meta.conversation_id
+  userMessage.id = meta.user_message_id
+  assistantMessage.id = meta.assistant_message_id
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === 'AbortError'
+}
+
+function previousUserMessage(assistantMessage: Message): Message | null {
+  const assistantIndex = messages.value.findIndex((message) => message.id === assistantMessage.id)
+  if (assistantIndex <= 0) {
+    return null
+  }
+
+  for (let index = assistantIndex - 1; index >= 0; index -= 1) {
+    const message = messages.value[index]
+    if (message.role === 'user') {
+      return message
+    }
+  }
+  return null
+}
+
+function isLatestAssistantMessage(message: Message): boolean {
+  for (let index = messages.value.length - 1; index >= 0; index -= 1) {
+    if (messages.value[index].role === 'assistant') {
+      return messages.value[index].id === message.id
+    }
+  }
+  return false
+}
+
+function canRegenerate(message: Message): boolean {
+  return (
+    message.role === 'assistant' &&
+    !loading.value &&
+    !loadingHistory.value &&
+    isLatestAssistantMessage(message) &&
+    previousUserMessage(message) !== null &&
+    message.id !== 'welcome' &&
+    message.id !== 'loading' &&
+    message.id !== 'load-error'
+  )
 }
 
 function savedExpertToDetail(expert: ConversationExpert): ExpertDetail {
@@ -548,6 +706,16 @@ function pendingLabel(message: Message): string {
   }
   return message.status ?? 'Organizing answer'
 }
+
+function generationNotice(message: Message): string {
+  if (message.generationStatus === 'interrupted') {
+    return 'Stopped'
+  }
+  if (message.generationStatus === 'failed') {
+    return 'Failed'
+  }
+  return ''
+}
 </script>
 
 <template>
@@ -573,6 +741,9 @@ function pendingLabel(message: Message): string {
           </p>
           <p v-if="message.status && !pendingLabel(message)" class="message-status">
             {{ message.status }}<span class="typing-dots" aria-hidden="true">...</span>
+          </p>
+          <p v-if="generationNotice(message)" class="message-status">
+            {{ generationNotice(message) }}
           </p>
           <div v-if="visibleActivities(message).length" class="activity-panel">
             <p class="activity-title">Team activity</p>
@@ -621,6 +792,11 @@ function pendingLabel(message: Message): string {
               </div>
             </details>
           </details>
+          <div v-if="canRegenerate(message)" class="message-actions">
+            <button class="secondary-button" type="button" @click="regenerateMessage(message)">
+              Regenerate
+            </button>
+          </div>
         </template>
         <p v-else>{{ message.content }}</p>
       </article>
@@ -628,8 +804,11 @@ function pendingLabel(message: Message): string {
 
     <form class="composer" @submit.prevent="sendMessage">
       <textarea v-model="input" rows="3" placeholder="Message" :disabled="loadingHistory" />
-      <button type="submit" :disabled="loading || loadingHistory || !input.trim()">
-        {{ loading ? 'Sending' : 'Send' }}
+      <button v-if="loading" type="button" @click="stopGeneration">
+        Stop
+      </button>
+      <button v-else type="submit" :disabled="loadingHistory || !input.trim()">
+        Send
       </button>
     </form>
   </section>

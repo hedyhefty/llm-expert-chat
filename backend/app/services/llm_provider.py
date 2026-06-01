@@ -5,6 +5,8 @@ from typing import Any, Literal
 
 import httpx
 
+from app.core.config import settings
+
 
 @dataclass(frozen=True)
 class LLMStreamChunk:
@@ -13,16 +15,18 @@ class LLMStreamChunk:
 
 
 class OpenAICompatibleClient:
-    def __init__(self, base_url: str, api_key: str, model: str) -> None:
+    def __init__(self, base_url: str, api_key: str, model: str, timeout_seconds: float | None = None) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.model = model
+        self.timeout_seconds = timeout_seconds or settings.llm_request_timeout_seconds
 
     async def stream_chat(self, messages: list[dict[str, str]]) -> AsyncIterator[LLMStreamChunk]:
         headers = {"Authorization": f"Bearer {self.api_key}"}
         payload: dict[str, Any] = {"model": self.model, "messages": messages, "stream": True}
         payload.update(self._default_extra_body())
-        async with httpx.AsyncClient(timeout=120) as client:
+        timeout = httpx.Timeout(self.timeout_seconds, connect=20)
+        async with httpx.AsyncClient(timeout=timeout) as client:
             async with client.stream(
                 "POST",
                 f"{self.base_url}/chat/completions",

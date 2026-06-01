@@ -91,6 +91,7 @@ export type ConversationMessage = {
   id: string
   role: 'user' | 'assistant'
   content: string
+  status: string
   created_at: string
   mode?: ChatMode | null
   reasoning?: string
@@ -110,6 +111,20 @@ export type ChatExpertEvent = {
   content?: string
   reasoning?: string
   error?: string | null
+}
+
+export type ChatStreamMeta = {
+  conversation_id: string
+  user_message_id: string
+  assistant_message_id: string
+  mode: ChatMode
+}
+
+export type StreamChatOptions = {
+  signal?: AbortSignal
+  replaceAssistantMessageId?: string
+  sourceUserMessageId?: string
+  onMeta?: (meta: ChatStreamMeta) => void
 }
 
 export function getAuthToken(): string | null {
@@ -205,11 +220,19 @@ export async function streamChat(
   onToken: (token: string) => void,
   onReasoning?: (token: string) => void,
   onExpertEvent?: (event: ChatExpertEvent) => void,
+  options: StreamChatOptions = {},
 ): Promise<void> {
   const response = await fetch(`${API_BASE}/api/chat/stream`, {
     method: 'POST',
     headers: makeHeaders(),
-    body: JSON.stringify({ message, mode, conversation_id: conversationId }),
+    signal: options.signal,
+    body: JSON.stringify({
+      message,
+      mode,
+      conversation_id: conversationId,
+      replace_assistant_message_id: options.replaceAssistantMessageId,
+      source_user_message_id: options.sourceUserMessageId,
+    }),
   })
 
   if (!response.ok || !response.body) {
@@ -231,13 +254,13 @@ export async function streamChat(
     buffer = events.pop() ?? ''
 
     for (const event of events) {
-      handleSseEvent(event, onToken, onReasoning, onExpertEvent)
+      handleSseEvent(event, onToken, onReasoning, onExpertEvent, options.onMeta)
     }
   }
 
   buffer += decoder.decode()
   if (buffer.trim()) {
-    handleSseEvent(buffer, onToken, onReasoning, onExpertEvent)
+    handleSseEvent(buffer, onToken, onReasoning, onExpertEvent, options.onMeta)
   }
 }
 
@@ -284,6 +307,7 @@ function handleSseEvent(
   onToken: (token: string) => void,
   onReasoning?: (token: string) => void,
   onExpertEvent?: (event: ChatExpertEvent) => void,
+  onMeta?: (meta: ChatStreamMeta) => void,
 ): void {
   const dataLines: string[] = []
   let eventType = 'message'
@@ -316,6 +340,11 @@ function handleSseEvent(
       if (expertEvent) {
         onExpertEvent?.(expertEvent)
       }
+    } else if (eventType === 'meta') {
+      const meta = parseChatStreamMeta(token)
+      if (meta) {
+        onMeta?.(meta)
+      }
     }
   }
 }
@@ -323,6 +352,14 @@ function handleSseEvent(
 function parseExpertEvent(token: string): ChatExpertEvent | null {
   try {
     return JSON.parse(token) as ChatExpertEvent
+  } catch {
+    return null
+  }
+}
+
+function parseChatStreamMeta(token: string): ChatStreamMeta | null {
+  try {
+    return JSON.parse(token) as ChatStreamMeta
   } catch {
     return null
   }

@@ -415,6 +415,17 @@ button {
   font-weight: 600;
 }
 
+.message-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.message-actions button {
+  min-height: 34px;
+  padding: 0 12px;
+}
+
 .activity-panel {
   display: grid;
   gap: 6px;
